@@ -52,6 +52,8 @@ void Initialize(const std::vector<RegionRequest>& regions);
 // outside every mapped region. This is what the page table and
 // Memory::GetPointer hand out.
 uint8_t* HostPointer(uint32_t guestAddress);
+// Debug write watchpoint (NSMBW_DET_WATCHW): re-protect after a logged write.
+void DebugRearmWatch() noexcept;
 
 // Deferred (EFB) reads: the covered guest pages are made PAGE_NOACCESS in the
 // guest view so a flat read traps and materializes the copy.

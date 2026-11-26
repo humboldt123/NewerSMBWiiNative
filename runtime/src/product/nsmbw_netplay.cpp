@@ -306,8 +306,9 @@ void HashFrame(uint32_t frame)
     std::string chunks;
     const uint64_t h = HashGuestMemory(g.hashFile ? &chunks : nullptr);
     if (g.hashFile) {
-        std::fprintf(g.hashFile, "frame %u hash %016llX vnanos %lld%s\n", frame, static_cast<unsigned long long>(h),
-                     static_cast<long long>(GuestClock::g_virtualNanos.load()), chunks.c_str());
+        std::fprintf(g.hashFile, "frame %u hash %016llX vnanos %lld offthread %llu%s\n", frame,
+                     static_cast<unsigned long long>(h), static_cast<long long>(GuestClock::g_virtualNanos.load()),
+                     static_cast<unsigned long long>(GuestClock::g_offThreadReads.load()), chunks.c_str());
         std::fflush(g.hashFile);
     }
     if (g.active) {

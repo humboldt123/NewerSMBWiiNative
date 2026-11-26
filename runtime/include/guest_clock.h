@@ -36,6 +36,11 @@ inline std::atomic<bool> g_deterministic{[] {
     return (v != nullptr && *v != '\0' && *v != '0') || (net != nullptr && *net != '\0');
 }()};
 inline std::atomic<int64_t> g_virtualNanos{0};
+// The guest runs on the thread that loads the game (the launcher's main thread, which every guest
+// fiber shares). Reads from any other host thread (the audio mix worker, the renderer) see the
+// clock but never move it: how their reads interleave with the guest's differs between machines.
+inline const std::thread::id g_guestThread = std::this_thread::get_id();
+inline std::atomic<uint64_t> g_offThreadReads{0};
 inline time_point g_wallBase = g_epoch;  // guest thread only
 
 inline bool Deterministic() noexcept { return g_deterministic.load(std::memory_order_relaxed); }
@@ -54,6 +59,10 @@ inline uint64_t ReadNanosForGuest() noexcept
     if (!Deterministic()) {
         return static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(HostClock::now() - g_epoch).count());
+    }
+    if (std::this_thread::get_id() != g_guestThread) {
+        g_offThreadReads.fetch_add(1, std::memory_order_relaxed);
+        return static_cast<uint64_t>(g_virtualNanos.load(std::memory_order_relaxed));
     }
     return static_cast<uint64_t>(g_virtualNanos.fetch_add(kReadStepNanos, std::memory_order_relaxed));
 }

@@ -1,3 +1,4 @@
+#include "guest_clock.h"
 #include "guest_flat_memory.h"
 
 #include <algorithm>
@@ -514,7 +515,36 @@ void ReportUnmappedCommit(uint32_t guestAddress, uint64_t blockBase, bool isWrit
     std::cerr.flush();
 }
 
+// Debug write watchpoint (NSMBW_DET_WATCHW=<hex guest address>): the host page holding the word
+// is kept read-only; every write that faults on the word itself is logged with the translated
+// function doing it, then the page opens until DebugRearmWatch() closes it again.
+uint32_t g_watchAddr = 0;
+uint32_t g_watchOpener = 0;
+std::atomic<bool> g_watchArmed{false};
+
+void ArmWatchLocked() {
+    if (g_watchAddr == 0 || g_base == nullptr) return;
+    const uint64_t page = static_cast<uint64_t>(g_watchAddr) & ~(kHostPageSize - 1u);
+    if (ProtectRange(g_base + page, kHostPageSize, kProtRead)) g_watchArmed.store(true);
+}
+
 } // namespace
+
+void DebugRearmWatch() noexcept {
+    if (g_watchAddr == 0) return;
+    static uint32_t s_last = 0;
+    const uint8_t* p = g_base + g_watchAddr;
+    uint32_t v = 0;
+    std::memcpy(&v, HostPointer(g_watchAddr) ? HostPointer(g_watchAddr) : p, 4);
+    if (v != s_last) {
+        const CpuContext* cpu = TryGetCpuContext();
+        std::fprintf(stderr, "[det-watchw] %08X changed %08X -> %08X, seen at time read in func %08X (lr %08X), page opened by %08X\n",
+                     g_watchAddr, __builtin_bswap32(s_last), __builtin_bswap32(v),
+                     RecompMod::CurrentTranslatedExecutionAddress(), cpu ? cpu->lr : 0u, g_watchOpener);
+        s_last = v;
+    }
+    if (!g_watchArmed.load(std::memory_order_relaxed)) ArmWatchLocked();
+}
 
 bool IsActive() {
     return g_initialized;
@@ -638,6 +668,10 @@ void Initialize(const std::vector<RegionRequest>& regions) {
     // needed on the first mapping (that would fault in all 152 MiB at startup).
     g_activeRegions = regions;
     g_initialized = true;
+    if (const char* w = std::getenv("NSMBW_DET_WATCHW"); w && *w) {
+        g_watchAddr = static_cast<uint32_t>(std::strtoul(w, nullptr, 16));
+        ArmWatchLocked();
+    }
 
     RT_LOG(RT_TAG_MEMORY) << "guest address space reserved at 0x" << std::hex
               << reinterpret_cast<uintptr_t>(g_base) << std::dec << " (" << MappedRegions().size()
@@ -738,6 +772,27 @@ bool HandleAccessViolation(void* faultAddress, bool isWrite) noexcept {
     if (fault < base || fault - base >= kGuestSpaceSize) return false;
 
     const uint32_t guestAddress = static_cast<uint32_t>(fault - base);
+
+    if (g_watchAddr != 0 && g_watchArmed.load(std::memory_order_relaxed) &&
+        (guestAddress & ~(kHostPageSize - 1u)) == (g_watchAddr & ~(kHostPageSize - 1u))) {
+        static int s_pageFaults = 0;
+        if (++s_pageFaults <= 0) {
+            std::fprintf(stderr, "[det-watchw] page fault #%d at %08X write=%d func %08X\n", s_pageFaults,
+                         guestAddress, isWrite ? 1 : 0, RecompMod::CurrentTranslatedExecutionAddress());
+        }
+        if (guestAddress >= g_watchAddr && guestAddress < g_watchAddr + 4u) {
+            const CpuContext* cpu = TryGetCpuContext();
+            std::fprintf(stderr, "[det-watchw] write to %08X by func %08X pc %08X lr %08X vnanos %lld\n",
+                         guestAddress, RecompMod::CurrentTranslatedExecutionAddress(),
+                         cpu ? cpu->pc : 0u, cpu ? cpu->lr : 0u,
+                         static_cast<long long>(GuestClock::g_virtualNanos.load()));
+        }
+        const uint64_t page = static_cast<uint64_t>(guestAddress) & ~(kHostPageSize - 1u);
+        ProtectRange(g_base + page, kHostPageSize, kProtReadWrite);
+        g_watchOpener = RecompMod::CurrentTranslatedExecutionAddress();
+        g_watchArmed.store(false);
+        return true;
+    }
 
     // 1) Deferred (EFB) read: materialize the pending copy and drop the trap for the whole 4 KiB page span,
     //    not just the registered range, since protection is page-granular. Leaving a range registered but

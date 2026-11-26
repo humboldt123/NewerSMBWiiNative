@@ -1,3 +1,4 @@
+#include "guest_flat_memory.h"
 #include "guest_clock.h"
 #include "ppc_runtime.h"
 // ppc_runtime.h re-exports the rest of the ISA package; the CR tier is pulled in
@@ -45,6 +46,7 @@ std::array<uint32_t, 2048> g_sprShadow{};
 uint32_t g_reservationAddr = 0;
 bool g_hasReservation = false;
 uint64_t GetTimeBase() {
+    GuestFlat::DebugRearmWatch();
     // Wall clock normally; the virtual clock (guest_clock.h) in deterministic mode.
     return TimeBaseContract::NanosecondsToTicks(GuestClock::ReadNanosForGuest());
 }
