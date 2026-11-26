@@ -9,6 +9,7 @@
 #include "guest_clock.h"
 #include "guest_flat_memory.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -257,8 +258,28 @@ void Receive()
     }
 }
 
+// NSMBW_DET_DUMP=<frame>:<hex address>:<hex size>[:<path>] writes that guest range to a file at
+// that frame, to diff two machines byte by byte after a hash mismatch.
+void DumpIfRequested(uint32_t frame)
+{
+    static const char* spec = std::getenv("NSMBW_DET_DUMP");
+    if (spec == nullptr || *spec == '\0') return;
+    unsigned f = 0, addr = 0, size = 0;
+    char path[512] = "det_dump.bin";
+    if (std::sscanf(spec, "%u:%x:%x:%511s", &f, &addr, &size, path) < 3 || f != frame) return;
+    if (FILE* out = std::fopen(path, "wb")) {
+        for (uint32_t off = 0; off < size; off += 0x10000u) {
+            const uint8_t* p = GuestFlat::HostPointer(addr + off);
+            static const uint8_t zeros[0x10000] = {};
+            std::fwrite(p ? p : zeros, 1, std::min<uint32_t>(0x10000u, size - off), out);
+        }
+        std::fclose(out);
+    }
+}
+
 void HashFrame(uint32_t frame)
 {
+    DumpIfRequested(frame);
     if (frame == 0 || frame % kHashEveryFrames != 0) return;
     std::string chunks;
     const uint64_t h = HashGuestMemory(g.hashFile ? &chunks : nullptr);
