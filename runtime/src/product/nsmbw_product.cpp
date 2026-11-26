@@ -463,6 +463,9 @@ bool InitializeAuroraWindow(AuroraInfo& outInfo) {
 
     AuroraConfig config{};
     config.appName = RuntimeProduct::Active().displayName.data();
+#ifdef NSMBW_NEWER  // the build with Newer baked in: its own window title
+    config.appName = "Newer Super Mario Bros. Wii (Recompiled)";
+#endif
     config.userPath = userPath.c_str();
     config.cachePath = cachePath.c_str();
     config.logCallback = &RunAuroraLogCallback;

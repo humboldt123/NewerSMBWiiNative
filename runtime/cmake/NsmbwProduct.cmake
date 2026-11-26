@@ -19,7 +19,8 @@ if(MKW_BUILD_NSMBW)
     if(NSMBW_GAME_VERSION STREQUAL "P1")
         set(NSMBW_GEN_DIR "${MKW_RUNTIME_SOURCE_DIR}/../generated_nsmbw")
     else()
-        set(NSMBW_GEN_DIR "${MKW_RUNTIME_SOURCE_DIR}/../generated_nsmbw-${NSMBW_GAME_VERSION}")
+        set(NSMBW_VARIANT "" CACHE STRING "N = Newer SMBW baked in (projects/nsmbw/tools/newer_link.py)")
+        set(NSMBW_GEN_DIR "${MKW_RUNTIME_SOURCE_DIR}/../generated_nsmbw-${NSMBW_GAME_VERSION}${NSMBW_VARIANT}")
         if(NOT EXISTS "${NSMBW_GEN_DIR}/version/nsmbw_va_tokens.h")
             message(FATAL_ERROR "Missing ${NSMBW_GEN_DIR}/version: run projects/nsmbw/tools/gen_version_tables.py ${NSMBW_GAME_VERSION}")
         endif()
@@ -241,6 +242,9 @@ if(MKW_BUILD_NSMBW)
                 target_include_directories(${nsmbw_target} PRIVATE "${NSMBW_GEN_DIR}/version")
                 target_compile_definitions(${nsmbw_target} PRIVATE
                     NSMBW_VERSION_TABLES NSMBW_VERSION_${NSMBW_GAME_VERSION})
+                if(NSMBW_VARIANT STREQUAL "N")
+                    target_compile_definitions(${nsmbw_target} PRIVATE NSMBW_NEWER)
+                endif()
             endif()
         endforeach()
     endif()
@@ -417,6 +421,15 @@ if(MKW_BUILD_NSMBW)
     # the gitignored projects/nsmbw/branding/ and is only embedded when present locally - a clean
     # checkout still builds, just with the default icon.
     set(NSMBW_ICON "${MKW_RUNTIME_SOURCE_DIR}/../projects/nsmbw/branding/nsmbw.ico")
+    set(NSMBW_PRODUCT_NAME "NSMBWCompiled")
+    # The Newer build (NSMBW_VARIANT=N) has its own icon (the hammer power-up, rendered from the
+    # player's Newer files by projects/nsmbw/tools; gitignored like the other one) and name.
+    if(NSMBW_VARIANT STREQUAL "N")
+        set(NSMBW_PRODUCT_NAME "Newer Super Mario Bros. Wii (Recompiled)")
+        if(EXISTS "${MKW_RUNTIME_SOURCE_DIR}/../projects/nsmbw/branding/newer.ico")
+            set(NSMBW_ICON "${MKW_RUNTIME_SOURCE_DIR}/../projects/nsmbw/branding/newer.ico")
+        endif()
+    endif()
     if(WIN32 AND EXISTS "${NSMBW_ICON}")
         enable_language(RC)
         set(NSMBW_VERSION_COMMA "0,3,0,0")
@@ -431,8 +444,8 @@ BEGIN
   BEGIN
     BLOCK \"040904B0\"
     BEGIN
-      VALUE \"ProductName\", \"NSMBWCompiled\"
-      VALUE \"FileDescription\", \"NSMBWCompiled - native PC recompilation\"
+      VALUE \"ProductName\", \"${NSMBW_PRODUCT_NAME}\"
+      VALUE \"FileDescription\", \"${NSMBW_PRODUCT_NAME}\"
       VALUE \"FileVersion\", \"${NSMBW_VERSION_DOT}\"
       VALUE \"ProductVersion\", \"${NSMBW_VERSION_DOT}\"
       VALUE \"OriginalFilename\", \"NSMBWCompiled.exe\"

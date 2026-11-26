@@ -1959,6 +1959,31 @@ public sealed partial class PpcLifter
                     return instructions;
                 }
 
+            // Conditional call (bc with LK and a plain CR condition): `beql sub` calls sub when the
+            // condition holds and continues at the next instruction either way. Hand-written
+            // assembly uses it (Newer SMBW's hooks); compilers do not. Unlike the generic "bcl"
+            // above, which is a linked branch inside the function, the target here is a subroutine.
+            case "beql":
+            case "bnel":
+            case "bltl":
+            case "bgtl":
+            case "bgel":
+            case "blel":
+            case "bsol":
+            case "bnsl":
+                {
+                    var rawInstr = ReadRawInstruction(ins);
+                    var bo = (int)((rawInstr >> 21) & 0x1F);
+                    var bi = (int)((rawInstr >> 16) & 0x1F);
+                    var fallthrough = $"0x{ins.EndAddress:X8}";
+                    var targetAddr = ins.BranchTargets.FirstOrDefault();
+                    var callBlock = $"link_call_{ins.EndAddress:X8}_{targetAddr:X8}";
+                    return new IrInstruction[]
+                    {
+                        new IrBranch("raw", callBlock, fallthrough, BuildBoConditionExpression(bo, bi, allowCtr: true))
+                    };
+                }
+
             case "blrl":
                 // Branch to address in LR and update LR with the return address.
                 var blrlArgs = AbiCallArguments;

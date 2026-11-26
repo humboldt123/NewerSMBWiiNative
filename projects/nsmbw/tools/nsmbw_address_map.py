@@ -21,6 +21,22 @@ DEFAULT_PATH = Path(__file__).resolve().parents[3] / "NSMBW-Maps" / "address-map
 _RANGE = re.compile(r"^([0-9A-Fa-f]{8})-([0-9A-Fa-f]{8}|\*):\s*([+-])0x([0-9A-Fa-f]+)")
 
 
+# d_basesNP's BSS in USA rev 2: the map says +0x40 from P1 0x80990800 (the console's BSS block), the
+# translator's image has it at +0x30 like the data before it (up to d_enemiesNP's load address).
+LAYOUT_FIX = {"E2": [(0x80990800, 0x809A2C9F, 0x30)]}
+# The Newer build (E2N) is translated with NSMBW_REL_BSS_CONSOLE=1: each REL's BSS is at its console
+# address, the aligned end of fixSize. Rows: our P1 (translator-layout) BSS range -> that address.
+#   REL          P1 last section end   BSS size   E2 console BSS
+#   d_profileNP  0x8076BD44            0x208      0x8076D4A0
+#   d_basesNP    0x8098FF18            0x12484    0x80990840
+#   d_enemiesNP  0x80B110D8            0xB4E0     0x80B11460
+#   d_en_bossNP  0x80B891C8            0x487C     0x80B89AE0
+LAYOUT_FIX["E2N"] = [(0x8076BD44, 0x8076BD44 + 0x208 - 1, 0x8076D4A0 - 0x8076BD44),
+                     (0x8098FF18, 0x8098FF18 + 0x12484 - 1, 0x80990840 - 0x8098FF18),
+                     (0x80B110D8, 0x80B110D8 + 0xB4E0 - 1, 0x80B11460 - 0x80B110D8),
+                     (0x80B891C8, 0x80B891C8 + 0x487C - 1, 0x80B89AE0 - 0x80B891C8)]
+
+
 class AddressMap:
     def __init__(self, parents, ranges):
         self.parents = parents  # version -> parent version (None for the root)
@@ -81,3 +97,37 @@ class AddressMap:
             if a is None:
                 return None
         return a
+
+    def flat_ranges(self, version):
+        """[(P1 start, P1 end, offset)] for `version`, with the parent chain composed (E2 extends
+        E1 extends P1): what a version that extends P1 directly has in self.ranges."""
+        chain = self._chain(version)[:-1]  # version, parent, ... (root left out)
+        flat = [(0x80000000, 0xFFFFFFFF, 0)]
+        for v in reversed(chain):  # from the root's child down to `version`
+            out = []
+            for s, e, o in flat:
+                for s2, e2, o2 in self.ranges[v]:
+                    lo, hi = max(s, s2 - o), min(e, e2 - o)
+                    if lo <= hi:
+                        out.append((lo, hi, o + o2))
+            flat = sorted(out)
+        # The map describes a console, where a REL's BSS is a separate block after fixSize. The
+        # translator puts it right after the last section instead, so inside a REL's BSS the shift
+        # is the one its last section has. Our P1 addresses there are translator-layout ones.
+        for lo, hi, off in LAYOUT_FIX.get(version, ()):
+            out = []
+            for s, e, o in flat:
+                if e < lo or s > hi:
+                    out.append((s, e, o)); continue
+                if s < lo: out.append((s, lo - 1, o))
+                out.append((max(s, lo), min(e, hi), off))
+                if e > hi: out.append((hi + 1, e, o))
+            flat = sorted(out)
+        return flat
+
+    def convert_p1(self, addr, version):
+        """P1 address -> `version`, through flat_ranges (so with LAYOUT_FIX applied)."""
+        for s, e, o in self.flat_ranges(version):
+            if s <= addr <= e:
+                return addr + o
+        return None

@@ -173,7 +173,7 @@ void ReportDylinkHeapOnce()
     }
     std::fprintf(stderr, "[nsmbw][rel] dylink heap 0x%08X: [0x%08X, 0x%08X)\n", heap, start, end);
     struct { const char* name; uint32_t base, size; } images[] = {
-        {"d_profileNP", NSMBW_VA(0x807684C0u), 14992u}, {"d_basesNP", NSMBW_VA(0x8076D680u), NSMBW_BY_VERSION(2313500u, 2313532u) /* USA: +0x20, as its fixSize; log-only check */},
+        {"d_profileNP", NSMBW_VA(0x807684C0u), 14992u}, {"d_basesNP", NSMBW_VA(0x8076D680u), NSMBW_BY_VERSION3(2313500u, 2313532u, 2313484u) /* USA: +0x20, as its fixSize; log-only check */},
         {"d_enemiesNP", NSMBW_VA(0x809A2CA0u), 1546520u}, {"d_en_bossNP", NSMBW_VA(0x80B1C920u), 463140u}};
     for (const auto& im : images) {
         const bool inside = im.base >= start && im.base + im.size <= end;

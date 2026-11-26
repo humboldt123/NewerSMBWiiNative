@@ -881,6 +881,18 @@ public sealed class FunctionTranslator
             return true;
         }
 
+        // Conditional call (PpcLifter's beql/bnel/...): call the subroutine, then go on.
+        if (TryParseLinkBranchLabel(label, "link_call_", out fallthrough, out var callTarget))
+        {
+            block = new IrBasicBlock(label, new IrInstruction[]
+            {
+                new IrAssign("lr", IrValue.Imm((int)fallthrough)),
+                new IrCall(string.Empty, $"0x{callTarget:X8}", BuildAbiCallArgs()),
+                new IrJump($"0x{fallthrough:X8}")
+            });
+            return true;
+        }
+
         if (TryParseLinkBranchLabel(label, LinkBranchPrefix, out fallthrough, out var target))
         {
             block = new IrBasicBlock(label, new IrInstruction[]

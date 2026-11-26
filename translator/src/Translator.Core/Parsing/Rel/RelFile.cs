@@ -112,6 +112,17 @@ public sealed class RelFile
         // inflation is exactly what made each one's computed range run into the next REL's start.
         var maxSectionExtent = ComputeMaxSectionExtent(sections, bssSectionIndex);
         var bssOffset = AlignUp(maxSectionExtent, bssAlign);
+        // NSMBW_REL_BSS_CONSOLE=1: put BSS where a console has it, at the 32-byte-aligned end of
+        // fixSize (header word 0x48; OSLinkFixed keeps the file up to there, relocation tables
+        // included). Code written against console addresses - a Riivolution mod such as Newer,
+        // which names BSS objects by absolute address - needs this layout. Checked against the
+        // community address map: PAL rev 1 d_basesNP 0x8076D680 + fixSize 0x223178 -> BSS
+        // 0x80990800, and BSS end + a heap header, aligned, is d_enemiesNP's load address.
+        if (Environment.GetEnvironmentVariable("NSMBW_REL_BSS_CONSOLE") == "1" && raw.Length >= 0x4C)
+        {
+            var fixSize = ReadUInt32(raw, 0x48);
+            bssOffset = AlignUp(Math.Max(fixSize, maxSectionExtent), 0x20u);
+        }
         var totalSize = checked(bssOffset + bssSize);
         var adjustedSections = ApplyBssLayout(sections, bssSectionIndex, bssOffset, bssSize);
         var imports = ParseImports(raw, importTableOffset, importTableSize);

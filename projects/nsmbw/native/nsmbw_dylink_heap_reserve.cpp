@@ -52,7 +52,7 @@ struct RelRange {
 constexpr RelRange kRels[] = {
     {"d_profileNP", NSMBW_VA(0x807684C0u), 0x4F84u + 0x208u},
     // fixSize is version-specific: USA rev 1's d_basesNP is 0x20 bytes longer (its REL header).
-    {"d_basesNP", NSMBW_VA(0x8076D680u), NSMBW_BY_VERSION(0x223178u, 0x223198u) + 0x12484u},
+    {"d_basesNP", NSMBW_VA(0x8076D680u), NSMBW_BY_VERSION3(0x223178u, 0x223198u, 0x223168u /* USA rev 2, from its REL header */) + 0x12484u},
     {"d_enemiesNP", NSMBW_VA(0x809A2CA0u), 0x16E780u + 0xB4E0u},
     {"d_en_bossNP", NSMBW_VA(0x80B1C920u), 0x6D170u + 0x487Cu},
 };

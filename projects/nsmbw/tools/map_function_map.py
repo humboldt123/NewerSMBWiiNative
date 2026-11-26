@@ -78,7 +78,7 @@ def load_image(code_dir, dol_name, rel_loads):
 
 # Small-data base registers per version (r13 = _SDA_BASE_, r2 = _SDA2_BASE_), from each main.dol's
 # __init_registers. P1 matches projects/nsmbw/nsmbw.yml; checked against the DOL in main().
-SDA = {"P1": (0x8042F980, 0x80433360), "E1": (0x8042F680, 0x80433080)}
+SDA = {"P1": (0x8042F980, 0x80433360), "E1": (0x8042F680, 0x80433080), "E2": (0x8042F680, 0x80433080)}
 
 
 def read_init_registers(img, entry=0x80004050):
@@ -156,12 +156,17 @@ def main():
     do_prove = "--prove" in sys.argv
     if len(args) != 3:
         sys.exit(__doc__)
-    version, code_dir, out_path = args[0], Path(args[1]), Path(args[2])
+    version, code_dir, out_path = args[0][:2], Path(args[1]), Path(args[2])  # "E2N" maps as E2
+    import nsmbw_address_map
+    if args[0] != version and args[0] in nsmbw_address_map.LAYOUT_FIX:
+        nsmbw_address_map.LAYOUT_FIX[version] = nsmbw_address_map.LAYOUT_FIX[args[0]]
     amap = AddressMap.load()
-    rel_loads = {n: amap.convert(a, "P1", version) for n, a in REL_LOAD_P1.items()}
-    src = load_image(ROOT / "NSMBW-Decomp" / "original", "wiimj2d.dol", REL_LOAD_P1)
+    rel_loads = {n: amap.convert_p1(a, version) for n, a in REL_LOAD_P1.items()}
+    # Without a PAL dump (NSMBW-Decomp/original) the map is trusted, not checked: --no-source.
+    have_src = "--no-source" not in sys.argv
+    src = load_image(ROOT / "NSMBW-Decomp" / "original", "wiimj2d.dol", REL_LOAD_P1) if have_src else Image()
     dst = load_image(code_dir, "main.dol", rel_loads)
-    for v, img in (("P1", src), (version, dst)):
+    for v, img in ((("P1", src),) if have_src else ()) + ((version, dst),):
         got = read_init_registers(img)
         if got != SDA[v]:
             sys.exit("SDA table wrong for %s: DOL sets r13/r2 = %s" % (v, ["%08X" % x if x else None for x in got]))
@@ -179,11 +184,15 @@ def main():
     counts = {"identical": 0, "equivalent": 0, "different": 0}
     for addr, parts in entries:
         raw = " ".join(parts)
-        new = amap.convert(addr, "P1", version)
+        new = amap.convert_p1(addr, version)
         if new is None:
             unmapped.append(raw)
             continue
         length = min(next_start.get(addr, addr + 4) - addr, 0x10000) if do_prove else 4
+        if not have_src:
+            counts["equivalent"] += 1
+            lines.append(" ".join(["%08X" % new] + parts[1:]))
+            continue
         identical, bad = prove(src, dst, addr, new, length, amap, version)
         if bad:
             counts["different"] += 1

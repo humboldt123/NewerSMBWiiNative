@@ -80,10 +80,17 @@ constexpr uint32_t MapOrSelf(uint32_t address) {
 
 // A per-version fact that is not an address (a REL's size, say): NSMBW_BY_VERSION(pal, usa).
 // CMake defines NSMBW_VERSION_E1 for the USA rev 1 build. Add a parameter per new version.
-#if defined(NSMBW_VERSION_E1)
+#if defined(NSMBW_VERSION_E1) || defined(NSMBW_VERSION_E2)  // E2 (USA rev 2) shares E1's values
 #define NSMBW_BY_VERSION(p1, e1) (e1)
 #else
 #define NSMBW_BY_VERSION(p1, e1) (p1)
+#endif
+
+// The same with USA rev 2 ("E2") given its own value, where it differs from USA rev 1.
+#if defined(NSMBW_VERSION_E2)
+#define NSMBW_BY_VERSION3(p1, e1, e2) (e2)
+#else
+#define NSMBW_BY_VERSION3(p1, e1, e2) NSMBW_BY_VERSION(p1, e1)
 #endif
 
 // Copied translated code builds an address in two steps, as the PowerPC does (lis + a signed low

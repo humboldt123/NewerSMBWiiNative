@@ -666,5 +666,9 @@ loc_80141574:
 
 }
 
+#ifndef NSMBW_NEWER  // Newer patches this function: its patched translation runs instead
 PPC_NATIVE_OVERRIDE_VOID(80141080, NsmbwPowerUpFreeze_ExecuteChangeInit_80141080, (CpuContext* ctx), (ctx));
+#endif
+#ifndef NSMBW_NEWER  // Newer patches this function: its patched translation runs instead
 PPC_NATIVE_OVERRIDE_VOID(80141460, NsmbwPowerUpFreeze_ExecuteChangeNormal_80141460, (CpuContext* ctx), (ctx));
+#endif

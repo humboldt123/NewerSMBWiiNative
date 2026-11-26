@@ -422,4 +422,6 @@ loc_8013DB18:
 // RECOMP_GUEST_ABI gpr_read=0xFFFFFFFF gpr_write=0xFFFFFFFF gpr_return=0x00000018 fpr_read=0xFFFFFFFF fpr_write=0xFFFFFFFF fpr_return=0x00000002 cr_read=0xFF cr_write=0xFF xer_read=1 xer_write=1 fence=1
 // RECOMP_REGISTRATION base 0x8013DA30 func_8013DA30 preserves=true fpr_mask=0x00000000
 
+#ifndef NSMBW_NEWER  // Newer patches this function: its patched translation runs instead
 PPC_NATIVE_OVERRIDE_VOID(8013DA30, NsmbwDeathFreeze_StopOtherDownDemo_8013DA30, (CpuContext* ctx), (ctx));
+#endif

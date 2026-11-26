@@ -350,7 +350,9 @@ loc_8077AB4C:
 
 }
 
+#ifndef NSMBW_NEWER  // Newer patches this function: its patched translation runs instead
 PPC_NATIVE_OVERRIDE_VOID(8077AA10, NsmbwWmMenuSaveLabel_8077AA10, (CpuContext* ctx), (ctx));
+#endif
 
 extern "C" void NsmbwWmMenuSelect_8092FC30(CpuContext* MKW_RESTRICT ctx)
 {
@@ -728,4 +730,6 @@ loc_8092FD60:
 
 }
 
+#ifndef NSMBW_NEWER  // Newer patches this function: its patched translation runs instead
 PPC_NATIVE_OVERRIDE_VOID(8092FC30, NsmbwWmMenuSelect_8092FC30, (CpuContext* ctx), (ctx));
+#endif

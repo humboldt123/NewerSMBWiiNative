@@ -46,6 +46,7 @@ struct GameVersion {
 constexpr GameVersion kSupportedVersions[] = {
     {"SMNP01", 1, L"P1", L"Europe (PAL), revision 1"},
     {"SMNE01", 1, L"E1", L"USA, revision 1"},
+    {"SMNE01", 2, L"E2", L"USA, revision 2"},
 };
 
 const wchar_t* RegionName(char regionLetter) {

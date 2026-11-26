@@ -1112,6 +1112,12 @@ int RunTranslateRecursive(string[] argsTail)
                 {
                     Console.WriteLine($"[translator]   skipped map entry 0x{address:X8}: {reason}");
                 }
+                // NSMBW_SKIP_LOG=<file>: the whole list with reasons (the console shows 20).
+                if (Environment.GetEnvironmentVariable("NSMBW_SKIP_LOG") is { Length: > 0 } skipLog)
+                {
+                    File.WriteAllLines(skipLog, speculativeSkips.OrderBy(static skip => skip.Address)
+                        .Select(static skip => $"{skip.Address:X8} {skip.Reason}"));
+                }
                 Console.WriteLine(
                     $"[translator] Skipped {speculativeSkips.Count:N0} map entry/entries that did not translate; " +
                     "these are seeded only by the map and are never reached by a call.");
