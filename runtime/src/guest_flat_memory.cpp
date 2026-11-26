@@ -530,6 +530,85 @@ void ArmWatchLocked() {
 
 } // namespace
 
+} // namespace GuestFlat
+
+// Debug write watch, exact mode (macOS ARM64): instead of opening the watched page on a fault, the
+// faulting store is decoded and performed through the host alias, and the pc stepped past it, so
+// the page stays protected and every store to the watched word is attributed to its host function.
+#if defined(__APPLE__) && defined(__aarch64__)
+#include <dlfcn.h>
+#include <sys/ucontext.h>
+extern "C" bool GuestFlatDebugWatchTrap(void* faultAddress, void* context) noexcept {
+    using namespace GuestFlat;
+    if (g_watchAddr == 0 || context == nullptr || g_base == nullptr) return false;
+    const uintptr_t fault = reinterpret_cast<uintptr_t>(faultAddress);
+    const uintptr_t base = reinterpret_cast<uintptr_t>(g_base);
+    if (fault < base || fault - base >= kGuestSpaceSize) return false;
+    const uint32_t guestAddress = static_cast<uint32_t>(fault - base);
+    if ((guestAddress & ~(kHostPageSize - 1u)) != (g_watchAddr & ~(kHostPageSize - 1u))) return false;
+    auto* uc = static_cast<ucontext_t*>(context);
+    auto& ss = uc->uc_mcontext->__ss;
+    auto& ns = uc->uc_mcontext->__ns;
+    const uint32_t insn = *reinterpret_cast<const uint32_t*>(ss.__pc);
+    auto x = [&](unsigned r) -> uint64_t { return r == 31 ? 0 : ss.__x[r]; };
+    uint8_t data[32];
+    unsigned size = 0;
+    int writebackReg = -1;
+    uint64_t writebackValue = 0;
+    const unsigned rt = insn & 31, rn = (insn >> 5) & 31;
+    if ((insn & 0x3A000000u) == 0x38000000u && ((insn >> 22) & 3u) == 0u) {
+        // STR/STUR/STRB/STRH (+ SIMD), unscaled/pre/post/register/unsigned-offset forms
+        const bool simd = (insn >> 26) & 1u;
+        unsigned sz = insn >> 30;
+        if (simd && ((insn >> 23) & 1u)) sz = 4;  // Q register
+        size = 1u << sz;
+        if (simd) std::memcpy(data, &ns.__v[rt], size);
+        else { const uint64_t v = x(rt); std::memcpy(data, &v, size); }
+        if (((insn >> 24) & 1u) == 0u && ((insn >> 21) & 1u) == 0u) {
+            const unsigned mode = (insn >> 10) & 3u;
+            const int64_t imm9 = static_cast<int64_t>(static_cast<int32_t>(insn << 11) >> 23);
+            if (mode == 1u) { writebackReg = static_cast<int>(rn); writebackValue = ss.__x[rn] + imm9; }
+            if (mode == 3u) { writebackReg = static_cast<int>(rn); writebackValue = fault; }
+        }
+    } else if ((insn & 0x3A400000u) == 0x28000000u) {
+        // STP/STNP (+ SIMD)
+        const bool simd = (insn >> 26) & 1u;
+        const unsigned opc = insn >> 30;
+        const unsigned one = simd ? (4u << opc) : (opc == 2u ? 8u : 4u);
+        const unsigned rt2 = (insn >> 10) & 31;
+        if (simd) { std::memcpy(data, &ns.__v[rt], one); std::memcpy(data + one, &ns.__v[rt2], one); }
+        else { const uint64_t a = x(rt), b = x(rt2); std::memcpy(data, &a, one); std::memcpy(data + one, &b, one); }
+        size = one * 2;
+        const unsigned idx = (insn >> 23) & 3u;
+        const int64_t imm7 = static_cast<int64_t>(static_cast<int32_t>(insn << 10) >> 25) * one;
+        if (idx == 1u) { writebackReg = static_cast<int>(rn); writebackValue = ss.__x[rn] + imm7; }
+        if (idx == 3u) { writebackReg = static_cast<int>(rn); writebackValue = fault; }
+    } else {
+        return false;
+    }
+    uint8_t* host = HostPointer(guestAddress);
+    if (host == nullptr) return false;
+    std::memcpy(host, data, size);
+    if (guestAddress < g_watchAddr + 4u && guestAddress + size > g_watchAddr) {
+        Dl_info info{};
+        dladdr(reinterpret_cast<void*>(ss.__pc), &info);
+        uint32_t w = 0;
+        std::memcpy(&w, HostPointer(g_watchAddr), 4);
+        std::fprintf(stderr, "[det-watchx] %08X <- %08X by %s (+0x%llx) vnanos %lld\n", g_watchAddr,
+                     __builtin_bswap32(w), info.dli_sname ? info.dli_sname : "?",
+                     static_cast<unsigned long long>(ss.__pc - reinterpret_cast<uintptr_t>(info.dli_saddr)),
+                     static_cast<long long>(GuestClock::g_virtualNanos.load()));
+    }
+    if (writebackReg >= 0) ss.__x[writebackReg] = writebackValue;
+    ss.__pc += 4;
+    return true;
+}
+#else
+extern "C" bool GuestFlatDebugWatchTrap(void*, void*) noexcept { return false; }
+#endif
+
+namespace GuestFlat {
+
 void DebugRearmWatch() noexcept {
     if (g_watchAddr == 0) return;
     static uint32_t s_last = 0;

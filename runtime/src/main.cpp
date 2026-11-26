@@ -72,6 +72,7 @@ extern "C" int g_gxFrameCount;
 extern "C" const char* DVDResolveHostPathForTest(const char* dvdPath);
 bool OS_HLE_InterruptsEnabled() noexcept;
 
+extern "C" bool GuestFlatDebugWatchTrap(void* faultAddress, void* context) noexcept;
 namespace {
 
 // Defined below, beside the fatal-log machinery.
@@ -1114,6 +1115,7 @@ void PosixMemoryFaultHandler(int sig, siginfo_t* info, void* ucontextVoid) {
     // Guest-space faults are the flat memory interception mechanism (MMIO, deferred EFB reads,
     // the executable-write guard, unmapped pages). Resolving one here means resuming the
     // faulting instruction, which just returning from the handler does.
+    if (faultAddress != nullptr && GuestFlatDebugWatchTrap(faultAddress, ucontextVoid)) return;
     if (faultAddress != nullptr && GuestFlat::HandleAccessViolation(faultAddress, isWrite)) {
         return;
     }

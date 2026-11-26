@@ -434,7 +434,11 @@ static bool DvdEntryExists(const std::string& dvdPath) {
 // disc-index scan noisy and the by-name mapping quiet, matching each caller's old behavior.
 template <typename Visit>
 static void WalkDirectory(const fs::path& root, bool recursive, bool announceErrors, Visit&& visit) {
+    // Entries are visited in byte order of their paths, not in whatever order the host filesystem
+    // lists them: disc offsets and entry numbers are assigned in visit order and the game can see
+    // both, so APFS and NTFS (which list directories differently) must still agree for online play.
     std::error_code ec;
+    std::vector<fs::directory_entry> entries;
 
     if (!recursive) {
         for (const auto& entry : fs::directory_iterator(
@@ -442,35 +446,35 @@ static void WalkDirectory(const fs::path& root, bool recursive, bool announceErr
             if (ec) {
                 break;
             }
-            visit(entry);
+            entries.push_back(entry);
         }
-        return;
-    }
-
-    fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec);
-    if (ec) {
-        if (announceErrors) {
-            RT_LOG(RT_TAG_DVD) << "WARNING: cannot enumerate " << HostPathText(root) << ": "
-                      << ec.message() << std::endl;
-        }
-        return;
-    }
-
-    const fs::recursive_directory_iterator end;
-    while (it != end) {
-        const fs::directory_entry entry = *it;
-
-        it.increment(ec);
+    } else {
+        fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec);
         if (ec) {
             if (announceErrors) {
-                RT_LOG(RT_TAG_DVD) << "WARNING: stopped enumerating " << HostPathText(root) << ": "
+                RT_LOG(RT_TAG_DVD) << "WARNING: cannot enumerate " << HostPathText(root) << ": "
                           << ec.message() << std::endl;
-                return;
             }
-            visit(entry);
             return;
         }
+        const fs::recursive_directory_iterator end;
+        while (it != end) {
+            entries.push_back(*it);
+            it.increment(ec);
+            if (ec) {
+                if (announceErrors) {
+                    RT_LOG(RT_TAG_DVD) << "WARNING: stopped enumerating " << HostPathText(root) << ": "
+                              << ec.message() << std::endl;
+                }
+                break;
+            }
+        }
+    }
 
+    std::sort(entries.begin(), entries.end(), [](const fs::directory_entry& a, const fs::directory_entry& b) {
+        return a.path().generic_u8string() < b.path().generic_u8string();
+    });
+    for (const auto& entry : entries) {
         visit(entry);
     }
 }

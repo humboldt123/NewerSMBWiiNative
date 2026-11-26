@@ -10,6 +10,7 @@
 #endif
 #include <unistd.h>
 
+extern "C" bool GuestFlatDebugWatchTrap(void* faultAddress, void* context) noexcept;
 namespace RuntimeSignals {
 
 inline bool (*memoryFaultResolver)(void*, bool) = nullptr;
@@ -26,6 +27,7 @@ inline void MemoryFault(int signal, siginfo_t* info, void* context) {
         isWrite = (static_cast<ucontext_t*>(context)->uc_mcontext->__es.__esr & (1u << 6)) != 0;
     }
 #endif
+    if (info && GuestFlatDebugWatchTrap(info->si_addr, context)) return;
     if (info && memoryFaultResolver && memoryFaultResolver(info->si_addr, isWrite)) return;
     constexpr char message[] = "[nsmbw] Unhandled native memory fault.\n";
     (void)write(STDERR_FILENO, message, sizeof(message) - 1);
