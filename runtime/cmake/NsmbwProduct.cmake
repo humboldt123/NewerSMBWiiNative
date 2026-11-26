@@ -161,6 +161,14 @@ if(MKW_BUILD_NSMBW)
     else()
         target_link_libraries(nsmbw_runtime_common PRIVATE mkw::libco)
     endif()
+    # Guest-visible audio state (voice positions, envelopes, AUX buffers the game's reverb reads) is
+    # computed here, so it must round identically on every host for online play: no fast-math
+    # reassociation or contraction, which vectorizes differently on AVX2 and NEON.
+    set_source_files_properties(
+        "${MKW_RUNTIME_SOURCE_DIR}/src/hle/audio/ax_mix.cpp"
+        "${MKW_RUNTIME_SOURCE_DIR}/src/hle/audio/audio.cpp"
+        "${MKW_RUNTIME_SOURCE_DIR}/src/hle/audio/ax_memory.cpp"
+        PROPERTIES COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off" SKIP_UNITY_BUILD_INCLUSION ON)
 
     # PublicProducts.cmake applies MKW_HOST_MARCH_FLAG (-march=x86-64-v3 by default, v2 for the compat exe) to its own targets in one
     # foreach right at the end of that file - which has already run by the time this file is
