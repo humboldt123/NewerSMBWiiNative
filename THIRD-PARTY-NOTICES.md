@@ -112,7 +112,15 @@ CPU-architecture backends - amd64, x86, arm, aarch64, ppc, ppc64v2, plus the por
 fallback - though this project's x86_64-only target only ever compiles amd64.c) in
 `runtime/third_party/libco` from commit `e18e09d634d612a01781168ad4d76be10a7e3bad`.
 Source: <https://github.com/higan-emu/libco>. Full license text:
-`runtime/third_party/libco/LICENSE`.
+`runtime/third_party/libco/LICENSE`. The aarch64 backend's context switch is emitted as a real
+function on macOS, where code in a data array can't be made executable.
+
+### sse2neon 1.8.0 - MIT
+
+Copyright (c) sse2neon contributors.
+Spells the x86 SSE intrinsics the runtime uses in ARM NEON, for the macOS ARM64 build. Vendored as
+`runtime/include/isa/sse2neon.h` (license text in the file header).
+Source: <https://github.com/DLTcollab/sse2neon>
 
 ---
 
