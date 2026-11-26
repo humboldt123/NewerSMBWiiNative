@@ -48,7 +48,13 @@ constexpr DWORD kMemReservePlaceholder = 0x00040000;
 constexpr DWORD kMemPreservePlaceholder = 0x00000002;
 #endif
 constexpr size_t kAllocationGranularity = 0x10000;  // 64 KiB
-constexpr size_t kHostPageSize = 0x1000;
+#if defined(__APPLE__) && defined(__aarch64__)
+// Apple Silicon pages are 16 KiB, and mprotect() refuses anything not aligned to one.
+constexpr unsigned kHostPageShift = 14;
+#else
+constexpr unsigned kHostPageShift = 12;
+#endif
+constexpr size_t kHostPageSize = size_t{1} << kHostPageShift;
 
 // Named, platform-neutral protection modes so every fault-interception call site below (the
 // MMIO window, the executable-write guard, deferred-EFB-read protection, the on-demand
@@ -141,7 +147,7 @@ std::vector<GuardedRange>& ExecutableRanges() {
 
 // 4 KiB guest pages currently PAGE_READONLY for the executable-write guard.
 std::vector<uint8_t>& ExecutableProtectedPages() {
-    static std::vector<uint8_t> pages(1u << 20, 0);  // 2^32 / 4 KiB
+    static std::vector<uint8_t> pages(1u << (32 - kHostPageShift), 0);  // one per host page
     return pages;
 }
 
@@ -356,7 +362,7 @@ void ApplyExecutableProtectionLocked() {
         const uint64_t last = static_cast<uint64_t>(range.end) & ~(kHostPageSize - 1u);
         if (last <= first) continue;
         for (uint64_t page = first; page < last; page += kHostPageSize) {
-            const uint32_t pageIndex = static_cast<uint32_t>(page >> 12);
+            const uint32_t pageIndex = static_cast<uint32_t>(page >> kHostPageShift);
             if (protectedPages[pageIndex] != 0) continue;
             if (ProtectRange(g_base + page, kHostPageSize, kProtRead)) {
                 protectedPages[pageIndex] = 1;
@@ -574,10 +580,25 @@ void Initialize(const std::vector<RegionRequest>& regions) {
         // twice below (once here as the always-accessible host view, once per-region as the
         // guest view whose protection the fault handler controls), the same "one backing store,
         // two VA aliases" trick CreateFileMapping/MapViewOfFile(3) gives Windows.
+#if defined(__APPLE__)
+        // macOS has no memfd_create: a POSIX shared-memory object unlinked right away is the
+        // same anonymous, fd-backed store.
+        {
+            char name[64];
+            std::snprintf(name, sizeof(name), "/wiicompiled-%d-%u", static_cast<int>(getpid()),
+                          static_cast<unsigned>(Sections().size()));
+            section.fd = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0600);
+            if (section.fd >= 0) shm_unlink(name);
+        }
+        if (section.fd < 0) {
+            throw std::runtime_error(LastErrorText("shm_open for guest RAM"));
+        }
+#else
         section.fd = memfd_create("wiicompiled-guest-ram", MFD_CLOEXEC);
         if (section.fd < 0) {
             throw std::runtime_error(LastErrorText("memfd_create for guest RAM"));
         }
+#endif
         if (ftruncate(section.fd, static_cast<off_t>(rounded)) != 0) {
             throw std::runtime_error(LastErrorText("ftruncate for guest RAM"));
         }
@@ -761,7 +782,7 @@ bool HandleAccessViolation(void* faultAddress, bool isWrite) noexcept {
     // 2) Executable-write guard. Only writes trap (the pages are PAGE_READONLY),
     //    so a fault here is exactly the event the guard exists to report.
     {
-        const uint32_t pageIndex = guestAddress >> 12;
+        const uint32_t pageIndex = guestAddress >> kHostPageShift;
         bool guarded = false;
         {
             std::lock_guard<std::mutex> lock(StateMutex());
@@ -777,7 +798,7 @@ bool HandleAccessViolation(void* faultAddress, bool isWrite) noexcept {
                 // Those arrive in bulk, so the page is opened permanently
                 // rather than trapping every relocation.
                 std::lock_guard<std::mutex> lock(StateMutex());
-                if (ProtectRange(g_base + (static_cast<uint64_t>(pageIndex) << 12), kHostPageSize,
+                if (ProtectRange(g_base + (static_cast<uint64_t>(pageIndex) << kHostPageShift), kHostPageSize,
                                  kProtReadWrite)) {
                     ExecutableProtectedPages()[pageIndex] = 0;
                 }

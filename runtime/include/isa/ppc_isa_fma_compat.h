@@ -28,7 +28,7 @@
 //
 // Verified bit for bit against vfmaddps by projects/nsmbw/tools/test_fma_compat.cpp.
 
-#include <immintrin.h>
+#include "host_simd.h"
 
 // Lanes 0 and 1 of a, c, b (the two paired-single lanes) -> fma rounded to float, in lanes 0-1.
 // Lanes 2-3 of the result are zero; paired-single code only reads the low 64 bits.

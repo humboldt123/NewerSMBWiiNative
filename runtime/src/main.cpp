@@ -38,7 +38,11 @@
 #include <dbghelp.h>
 #else
 #include <signal.h>
+#if defined(__APPLE__)
+#include <sys/ucontext.h>  // <ucontext.h> needs _XOPEN_SOURCE on macOS
+#else
 #include <ucontext.h>
+#endif
 #include <unistd.h>
 #endif
 
@@ -1096,6 +1100,12 @@ void PosixMemoryFaultHandler(int sig, siginfo_t* info, void* ucontextVoid) {
     if (ucontextVoid != nullptr) {
         auto* uc = static_cast<ucontext_t*>(ucontextVoid);
         isWrite = (uc->uc_mcontext.gregs[REG_ERR] & 0x2) != 0;
+    }
+#elif defined(__APPLE__) && defined(__aarch64__)
+    // ESR_EL1 bit 6 (WnR) is set when a data abort was caused by a write.
+    if (ucontextVoid != nullptr) {
+        auto* uc = static_cast<ucontext_t*>(ucontextVoid);
+        isWrite = (uc->uc_mcontext->__es.__esr & (1u << 6)) != 0;
     }
 #endif
 

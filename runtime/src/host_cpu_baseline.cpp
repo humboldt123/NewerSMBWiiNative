@@ -9,6 +9,17 @@
 // A v3 exe that finds the CPU lacking starts "<its name>-compat.exe" from its own folder when
 // that file exists (the v2 build, shipped beside it), so players never have to pick an exe.
 
+#if defined(__aarch64__)
+// ARM64 (Apple Silicon): every ARMv8-A core has the NEON and FMA the build uses, so there is no
+// baseline to check and no compat build to hand off to.
+extern "C" bool MkwHostCpuMeetsLevel(unsigned, char* missing, unsigned missingSize) {
+    if (missing != nullptr && missingSize > 0) missing[0] = '\0';
+    return true;
+}
+#if !defined(MKW_CPU_BASELINE_NO_CTOR)
+extern "C" int MkwHostCpuBaselineInit() { return 0; }
+#endif
+#else  // x86-64
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -341,3 +352,4 @@ __attribute__((constructor(101))) static void MkwHostCpuBaselineCtor() {
     MkwHostCpuBaselineInit();
 }
 #endif  // !MKW_CPU_BASELINE_NO_CTOR
+#endif  // x86-64

@@ -22,14 +22,19 @@ internal static class AssemblyBlobWriter
         var expectedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var assembly = new StringBuilder();
         foreach (var header in headerLines) assembly.AppendLine(header);
-        // PE/COFF (Windows) and ELF (Linux) spell a read-only data section differently in GNU-as
-        // syntax - COFF section flags ("dr" = data, read-only) versus an ELF section needing an
-        // allocatable-only flag plus an explicit @progbits type. The build always targets
-        // whichever platform the translator itself runs on (there is no cross-compilation
-        // support), so that's what this picks the section syntax from.
-        assembly.AppendLine(OperatingSystem.IsWindows()
-            ? ".section .rdata,\"dr\""
-            : ".section .rodata,\"a\",@progbits");
+        // PE/COFF (Windows), ELF (Linux) and Mach-O (macOS) spell a read-only data section
+        // differently, and Mach-O prefixes C symbols with an underscore. A .S file goes through the
+        // C preprocessor, so one file picks the right spelling for whichever host assembles it.
+        assembly.AppendLine("#if defined(__APPLE__)");
+        assembly.AppendLine(".section __TEXT,__const");
+        assembly.AppendLine("#define BLOB_SYMBOL(name) _##name");
+        assembly.AppendLine("#elif defined(_WIN32)");
+        assembly.AppendLine(".section .rdata,\"dr\"");
+        assembly.AppendLine("#define BLOB_SYMBOL(name) name");
+        assembly.AppendLine("#else");
+        assembly.AppendLine(".section .rodata,\"a\",@progbits");
+        assembly.AppendLine("#define BLOB_SYMBOL(name) name");
+        assembly.AppendLine("#endif");
         assembly.AppendLine();
 
         foreach (var blob in blobs)
@@ -40,8 +45,8 @@ internal static class AssemblyBlobWriter
             var hash = ChecksumUtilities.Sha256Hex(blob.Data.Span);
             assembly.AppendLine($"// {blob.Comment}; sha256={hash}");
             assembly.AppendLine(".p2align 4");
-            assembly.AppendLine($".globl {blob.Symbol}");
-            assembly.AppendLine($"{blob.Symbol}:");
+            assembly.AppendLine($".globl BLOB_SYMBOL({blob.Symbol})");
+            assembly.AppendLine($"BLOB_SYMBOL({blob.Symbol}):");
             var referencePath = Path.Combine(blobReferenceDirectory, blob.FileName);
             assembly.AppendLine($".incbin \"{SanitizeAssemblyPath(referencePath)}\"");
             assembly.AppendLine();
@@ -51,16 +56,11 @@ internal static class AssemblyBlobWriter
         {
             if (!expectedFiles.Contains(Path.GetFullPath(stalePath))) File.Delete(stalePath);
         }
-        if (!OperatingSystem.IsWindows())
-        {
-            // Absence of a .note.GNU-stack section makes the linker assume the oldest, most
-            // conservative default for this object (an executable stack) and warn about it; this
-            // file has no code needing one, so mark it explicitly like every other GNU-as ELF
-            // object linked into the binary already does (the norm on modern toolchains, just not
-            // producible without an explicit section since this file is hand-assembled, not
-            // compiler-emitted).
-            assembly.AppendLine(".section .note.GNU-stack,\"\",@progbits");
-        }
+        // ELF only: without a .note.GNU-stack section the linker assumes this object needs an
+        // executable stack and warns. It has no code, so say so explicitly.
+        assembly.AppendLine("#if !defined(__APPLE__) && !defined(_WIN32)");
+        assembly.AppendLine(".section .note.GNU-stack,\"\",@progbits");
+        assembly.AppendLine("#endif");
         FileOutput.WriteTextIfChanged(assemblyPath, assembly.ToString());
     }
 

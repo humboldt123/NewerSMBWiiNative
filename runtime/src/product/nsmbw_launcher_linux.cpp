@@ -1,7 +1,18 @@
+#if !defined(__APPLE__)
 #include "setup.h"
+#endif
 
-#include <SDL3/SDL.h>
 #include <dlfcn.h>
+#if defined(__APPLE__)
+// The game dylib links SDL statically; linking it here too would load two copies of SDL's
+// Objective-C classes. Errors use a CoreFoundation alert instead.
+#include <CoreFoundation/CoreFoundation.h>
+#else
+#include <SDL3/SDL.h>
+#endif
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 #include <sys/resource.h>
 
 #include <cstdio>
@@ -66,10 +77,37 @@ int Run(int argc, char** argv, bool& unattended) {
         throw std::runtime_error(std::string("This processor needs x86-64-v2 support. Missing: ") + missing);
     }
 
+#if defined(__APPLE__)
+    // No setup screen on macOS yet: the disc (and any mod overlay) comes from Config.toml, and the
+    // game library is the one NSMBWCompiled-*.dylib beside this executable, or NSMBW_GAME_LIBRARY.
+    (void)disc;
+    (void)setup;
+    (void)cpuIsV3;
+    fs::path library;
+    if (const char* chosen = std::getenv("NSMBW_GAME_LIBRARY"); chosen && *chosen) library = chosen;
+    else {
+        uint32_t size = 0;
+        _NSGetExecutablePath(nullptr, &size);
+        std::string self(size, '\0');
+        _NSGetExecutablePath(self.data(), &size);
+        const fs::path folder = fs::canonical(fs::path(self.c_str())).parent_path();
+        for (const auto& entry : fs::directory_iterator(folder)) {
+            const auto name = entry.path().filename().string();
+            if (name.rfind("NSMBWCompiled-", 0) == 0 && entry.path().extension() == ".dylib") {
+                library = entry.path();
+                break;
+            }
+        }
+        if (library.empty()) throw std::runtime_error("No NSMBWCompiled-*.dylib next to the launcher.");
+    }
+#else
     const auto selected = PrepareLinuxGame(disc, setup, unattended, cpuIsV3);
     if (selected.disc.empty()) return 0;
     const auto& library = selected.library;
+#endif
+#if !defined(__APPLE__)  // macOS: the 16 MiB main-thread stack is set by -stack_size at link time
     EnsureStackSize();
+#endif
     void* game = dlopen(library.c_str(), RTLD_NOW | RTLD_LOCAL);
     if (!game) throw std::runtime_error("Could not load " + library.string() + ": " + dlerror());
     auto entry = reinterpret_cast<int (*)()>(dlsym(game, "NsmbwGameMain"));
@@ -86,7 +124,16 @@ int main(int argc, char** argv) {
         return Run(argc, argv, unattended);
     } catch (const std::exception& error) {
         std::fprintf(stderr, "[launcher] %s\n", error.what());
+#if defined(__APPLE__)
+        if (!unattended) {
+            CFStringRef text = CFStringCreateWithCString(nullptr, error.what(), kCFStringEncodingUTF8);
+            CFUserNotificationDisplayAlert(0, kCFUserNotificationStopAlertLevel, nullptr, nullptr, nullptr,
+                                           CFSTR("NSMBWCompiled"), text, nullptr, nullptr, nullptr, nullptr);
+            if (text) CFRelease(text);
+        }
+#else
         if (!unattended) SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "NSMBWCompiled", error.what(), nullptr);
+#endif
         return 1;
     }
 }

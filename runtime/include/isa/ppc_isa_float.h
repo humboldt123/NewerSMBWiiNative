@@ -109,7 +109,9 @@ inline __m128 PpcBroadcastPs1Inline(double value)
 // mul and add, which rounds twice (see ppc_isa_fma_compat.h).
 inline __m128 PpcFmaddPsVecInline(__m128 a, __m128 c, __m128 b)
 {
-#if defined(__FMA__)
+#if defined(__aarch64__)
+    return vfmaq_f32(b, a, c);  // ARM64 FMA is always present and single-rounding
+#elif defined(__FMA__)
     return _mm_fmadd_ps(a, c, b);
 #else
     return PpcFmaddPairCompatInline(a, c, b);
@@ -118,7 +120,9 @@ inline __m128 PpcFmaddPsVecInline(__m128 a, __m128 c, __m128 b)
 
 inline __m128 PpcFmsubPsVecInline(__m128 a, __m128 c, __m128 b)
 {
-#if defined(__FMA__)
+#if defined(__aarch64__)
+    return vfmaq_f32(vnegq_f32(b), a, c);
+#elif defined(__FMA__)
     return _mm_fmsub_ps(a, c, b);
 #else
     return PpcFmsubPairCompatInline(a, c, b);
@@ -127,7 +131,7 @@ inline __m128 PpcFmsubPsVecInline(__m128 a, __m128 c, __m128 b)
 
 inline float PpcFmaddFloatInline(float a, float c, float b)
 {
-#if defined(__FMA__)
+#if defined(__FMA__) || defined(__aarch64__)
     return std::fma(a, c, b);
 #else
     // Without -mfma, std::fma(float) is a call into the C library's software fmaf.

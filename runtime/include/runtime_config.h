@@ -26,7 +26,11 @@
 #else
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 #endif
 
 struct RuntimeUserConfig {
@@ -185,6 +189,17 @@ inline std::optional<std::filesystem::path> ExecutableDirectory() {
         }
         buffer.resize(buffer.size() * 2);
     }
+#elif defined(__APPLE__)
+    uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);
+    std::string buffer(size, '\0');
+    if (_NSGetExecutablePath(buffer.data(), &size) != 0) {
+        return std::nullopt;
+    }
+    buffer.resize(std::strlen(buffer.c_str()));
+    std::error_code ec;
+    const auto resolved = std::filesystem::canonical(buffer, ec);
+    return (ec ? std::filesystem::path(buffer) : resolved).parent_path();
 #else
     // /proc/self/exe is a Linux-specific magic symlink to the running executable; readlink()
     // does not NUL-terminate and silently truncates if the buffer is too small, so this grows

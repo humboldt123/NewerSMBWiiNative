@@ -202,7 +202,8 @@ if(MKW_BUILD_NSMBW)
     set(NSMBW_GLYPH_SOURCE "${MKW_RUNTIME_SOURCE_DIR}/src/product/nsmbw_button_glyphs.cpp")
     include(CheckCXXSourceCompiles)
     check_cxx_source_compiles("#ifndef __has_embed\n#error no_embed\n#endif\nint main() {}" NSMBW_HAS_EMBED)
-    if(NOT NSMBW_HAS_EMBED)
+    # Apple Clang expands #embed to plain (signed) char values, which narrows into unsigned char.
+    if(NOT NSMBW_HAS_EMBED OR APPLE)
         find_package(Python3 REQUIRED COMPONENTS Interpreter)
         file(GLOB_RECURSE NSMBW_GLYPH_PNGS CONFIGURE_DEPENDS
             "${MKW_RUNTIME_SOURCE_DIR}/../projects/nsmbw/assets/button_glyphs/*.png")
@@ -268,7 +269,9 @@ if(MKW_BUILD_NSMBW)
             dbghelp user32 winmm ws2_32 iphlpapi secur32 crypt32 windowsapp setupapi winusb shell32 ole32)
     else()
         target_link_libraries(NSMBWGame PRIVATE mkw::libco)
-        target_link_options(NSMBWGame PRIVATE -Wl,--no-undefined)
+        if(NOT APPLE)  # ld64 already refuses undefined symbols by default
+            target_link_options(NSMBWGame PRIVATE -Wl,--no-undefined)
+        endif()
     endif()
 
     # The launcher, NSMBWCompiled.exe (nsmbw_launcher.cpp): checks the CPU, loads the game DLL and
@@ -326,6 +329,13 @@ if(MKW_BUILD_NSMBW)
     # header, and a DLL's --stack is ignored.
     if(WIN32)
         target_link_options(NSMBWCompiled PRIVATE -Wl,--stack,16777216)
+    elseif(APPLE)
+        # macOS fixes the main thread's stack at exec time from the exe header (setrlimit after
+        # start does not grow it), so the 16 MiB goes in here, as on Windows.
+        target_link_options(NSMBWCompiled PRIVATE -Wl,-stack_size,0x1000000)
+        target_link_libraries(NSMBWCompiled PRIVATE "-framework CoreFoundation")
+        set_target_properties(NSMBWCompiled NSMBWGame PROPERTIES
+            BUILD_RPATH "@loader_path" INSTALL_RPATH "@loader_path")
     else()
         set(linux_setup "${MKW_RUNTIME_SOURCE_DIR}/../projects/nsmbw/linux")
         include("${linux_setup}/launcher.cmake")
@@ -459,6 +469,49 @@ END
 ")
         target_sources(NSMBWCompiled PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/nsmbw_resources.rc")
         message(STATUS "NSMBWCompiled: embedding icon ${NSMBW_ICON}")
+    endif()
+
+    # macOS: a bare executable gets the generic terminal icon in the Dock, so wrap it in a small
+    # .app next to it. Contents/MacOS/NSMBWCompiled is a symlink back to the build output, and the
+    # launcher and game resolve their own folder through it, so the game library, runtime files and
+    # portable UserData all stay where they are and every rebuild is picked up.
+    if(APPLE)
+        set(NSMBW_ICNS "${MKW_RUNTIME_SOURCE_DIR}/../projects/nsmbw/branding/nsmbw.icns")
+        if(NSMBW_VARIANT STREQUAL "N")
+            set(NSMBW_ICNS "${MKW_RUNTIME_SOURCE_DIR}/../projects/nsmbw/branding/newer.icns")
+        endif()
+        set(nsmbw_app "${CMAKE_CURRENT_BINARY_DIR}/${NSMBW_PRODUCT_NAME}.app")
+        set(nsmbw_bundle_id "io.github.nsmbwcompiled")
+        if(NSMBW_VARIANT STREQUAL "N")
+            set(nsmbw_bundle_id "io.github.nsmbwcompiled.newer")
+        endif()
+        file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/nsmbw_Info.plist"
+"<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
+<plist version=\"1.0\">
+<dict>
+  <key>CFBundleExecutable</key><string>NSMBWCompiled</string>
+  <key>CFBundleIdentifier</key><string>${nsmbw_bundle_id}</string>
+  <key>CFBundleName</key><string>${NSMBW_PRODUCT_NAME}</string>
+  <key>CFBundleDisplayName</key><string>${NSMBW_PRODUCT_NAME}</string>
+  <key>CFBundleIconFile</key><string>app.icns</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>0.3.0</string>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>GCSupportsControllerUserInteraction</key><true/>
+</dict>
+</plist>
+")
+        set(nsmbw_app_commands
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${nsmbw_app}/Contents/MacOS" "${nsmbw_app}/Contents/Resources"
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${CMAKE_CURRENT_BINARY_DIR}/nsmbw_Info.plist" "${nsmbw_app}/Contents/Info.plist"
+            COMMAND "${CMAKE_COMMAND}" -E create_symlink "../../../NSMBWCompiled" "${nsmbw_app}/Contents/MacOS/NSMBWCompiled")
+        if(EXISTS "${NSMBW_ICNS}")
+            list(APPEND nsmbw_app_commands
+                COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${NSMBW_ICNS}" "${nsmbw_app}/Contents/Resources/app.icns")
+        endif()
+        add_custom_command(TARGET NSMBWCompiled POST_BUILD ${nsmbw_app_commands} VERBATIM)
     endif()
 
     message(STATUS "NSMBWCompiled launcher + ${NSMBW_GAME_DLL_NAME}${CMAKE_SHARED_LIBRARY_SUFFIX} targets ready.")

@@ -3,7 +3,11 @@
 #if !defined(_WIN32)
 #include <csignal>
 #include <stdexcept>
+#if defined(__APPLE__)
+#include <sys/ucontext.h>  // <ucontext.h> needs _XOPEN_SOURCE on macOS
+#else
 #include <ucontext.h>
+#endif
 #include <unistd.h>
 
 namespace RuntimeSignals {
@@ -15,6 +19,11 @@ inline void MemoryFault(int signal, siginfo_t* info, void* context) {
 #if defined(__x86_64__)
     if (context) {
         isWrite = (static_cast<ucontext_t*>(context)->uc_mcontext.gregs[REG_ERR] & 2) != 0;
+    }
+#elif defined(__APPLE__) && defined(__aarch64__)
+    // ESR_EL1 bit 6 (WnR) is set when a data abort was caused by a write.
+    if (context) {
+        isWrite = (static_cast<ucontext_t*>(context)->uc_mcontext->__es.__esr & (1u << 6)) != 0;
     }
 #endif
     if (info && memoryFaultResolver && memoryFaultResolver(info->si_addr, isWrite)) return;

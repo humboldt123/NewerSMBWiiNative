@@ -18,6 +18,44 @@ static thread_local unsigned long co_active_buffer[64];
 static thread_local cothread_t co_active_handle = 0;
 static void (*co_swap)(cothread_t, cothread_t) = 0;
 
+#if defined(__APPLE__)
+/* Apple Silicon never lets data become executable (W^X, signed pages), so the same
+   instruction sequence is emitted as a real function instead of a patched array. */
+__asm__(
+  ".text\n"
+  ".p2align 2\n"
+  ".globl _libco_aarch64_swap\n"
+  ".private_extern _libco_aarch64_swap\n"
+  "_libco_aarch64_swap:\n"
+  "  mov x16,sp\n"
+  "  stp x16,x30,[x1]\n"
+  "  ldp x16,x30,[x0]\n"
+  "  mov sp,x16\n"
+  "  stp x19,x20,[x1, 16]\n"
+  "  ldp x19,x20,[x0, 16]\n"
+  "  stp x21,x22,[x1, 32]\n"
+  "  ldp x21,x22,[x0, 32]\n"
+  "  stp x23,x24,[x1, 48]\n"
+  "  ldp x23,x24,[x0, 48]\n"
+  "  stp x25,x26,[x1, 64]\n"
+  "  ldp x25,x26,[x0, 64]\n"
+  "  stp x27,x28,[x1, 80]\n"
+  "  ldp x27,x28,[x0, 80]\n"
+  "  str x29,    [x1, 96]\n"
+  "  ldr x29,    [x0, 96]\n"
+  "  stp d8, d9, [x1,112]\n"
+  "  ldp d8, d9, [x0,112]\n"
+  "  stp d10,d11,[x1,128]\n"
+  "  ldp d10,d11,[x0,128]\n"
+  "  stp d12,d13,[x1,144]\n"
+  "  ldp d12,d13,[x0,144]\n"
+  "  stp d14,d15,[x1,160]\n"
+  "  ldp d14,d15,[x0,160]\n"
+  "  br x30\n"
+);
+void libco_aarch64_swap(cothread_t, cothread_t);
+#define co_swap_function libco_aarch64_swap
+#else
 #ifdef LIBCO_MPROTECT
   alignas(4096)
 #else
@@ -50,9 +88,10 @@ static const uint32_t co_swap_function[1024] = {
   0x6d4a3c0e,  /* ldp d14,d15,[x0,160] */
   0xd61f03c0,  /* br x30               */
 };
+#endif
 
 static void co_init(void) {
-  #ifdef LIBCO_MPROTECT
+  #if defined(LIBCO_MPROTECT) && !defined(__APPLE__)
   unsigned long addr = (unsigned long)co_swap_function;
   unsigned long base = addr - (addr % sysconf(_SC_PAGESIZE));
   unsigned long size = (addr - base) + sizeof co_swap_function;

@@ -4,7 +4,7 @@
 #include <cstdint>
 
 #define MKW_RESTRICT __restrict
-#include <immintrin.h>
+#include "host_simd.h"
 
 inline constexpr bool MkwStateFreeAbiEnabled(uint32_t) noexcept
 {
