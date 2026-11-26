@@ -64,6 +64,7 @@
 // The keyboard is read through aurora's PAD keyboard-binding layer (dolphin/pad.h) with the
 // GC PAD bits used only as an intermediate; SDL_PumpEvents is what actually refreshes SDL's
 // key state and nothing else in the NSMBW runtime calls it after boot (see the tick pump).
+#include "../../../runtime/src/product/nsmbw_netplay.h"
 #include "nsmbw_va.h"  // NSMBW_VA / NSMBW_FUNC: guest addresses are PAL rev 1, mapped per version
 #include "hle_stubs.h"
 #include <aurora/env.hpp>
@@ -234,22 +235,43 @@ void SampleKeyboardForFrame() {
     // above still runs for the PAD layer's own bookkeeping; TranslatePadToWpad is kept only as
     // documentation of the old fixed mapping and for NSMBW_LEGACY_PAD_MAPPING=1 (player 0 only).
     static const bool legacy = AURORA_ENV("NSMBW_LEGACY_PAD_MAPPING") != nullptr;
-    g_connectedRemotes = legacy ? 1u : NsmbwControlsPlayerCount();
+    // Online play: this machine's player 1 controls plus the other machine's, swapped once per
+    // frame (runtime/src/product/nsmbw_netplay.cpp). Every frame index is the same on both
+    // machines because time is deterministic there, so the sample count is the frame number.
+    static uint32_t s_frame = 0;
+    const uint32_t frame = s_frame++;
+    const bool netplay = NsmbwNetplayActive();
+    uint32_t agreedHold[kMaxRemotes]{};
+    float agreedTilt[kMaxRemotes]{};
+    if (netplay) {
+        uint32_t localHold = NsmbwControlsReadWpad(0) | g_nsmbwSelfTestPressBits;
+        g_nsmbwSelfTestPressBits = 0;
+        NsmbwNetplayExchange(frame, localHold, NsmbwControlsReadTilt(0), agreedHold, agreedTilt);
+    } else {
+        NsmbwDeterminismFrame(frame);
+    }
+    g_connectedRemotes = netplay ? NsmbwNetplayPlayerCount() : legacy ? 1u : NsmbwControlsPlayerCount();
     NsmbwWpadSetConnectedCount(g_connectedRemotes);
     for (uint32_t chan = 0; chan < kMaxRemotes; ++chan) {
         RemoteState& r = g_remotes[chan];
         uint32_t hold = 0;
         float tiltTarget = 0.0f;
-        if (chan < g_connectedRemotes) {
-            hold = legacy ? TranslatePadToWpad(statuses[0]) : NsmbwControlsReadWpad(chan);
-            // acc.z target: tilt right (+input) is -acc.z - see "Sign" in the header comment.
-            tiltTarget = legacy ? 0.0f : -NsmbwControlsReadTilt(chan);
+        if (netplay) {
+            hold = agreedHold[chan];
+            tiltTarget = -agreedTilt[chan];
+        } else {
+            if (chan < g_connectedRemotes) {
+                hold = legacy ? TranslatePadToWpad(statuses[0]) : NsmbwControlsReadWpad(chan);
+                // acc.z target: tilt right (+input) is -acc.z - see "Sign" in the header comment.
+                tiltTarget = legacy ? 0.0f : -NsmbwControlsReadTilt(chan);
+            }
+            if (chan == 0) {
+                hold |= g_nsmbwSelfTestPressBits;
+                g_nsmbwSelfTestPressBits = 0;
+            }
+            // Skips the opening / a hint movie. Local-only (it acts on wall-clock timing), so off online.
+            hold = NsmbwMovieSkipFilterInput(chan, hold);
         }
-        if (chan == 0) {
-            hold |= g_nsmbwSelfTestPressBits;
-            g_nsmbwSelfTestPressBits = 0;
-        }
-        hold = NsmbwMovieSkipFilterInput(chan, hold); // - skips the opening / a hint movie
 
         // A shake press edge (not hold) starts one burst, so a tap is one spin like one flick of
         // the remote; the game's cooldowns decide how soon the next one can fire.

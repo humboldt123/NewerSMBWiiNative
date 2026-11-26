@@ -1,4 +1,5 @@
 // gx_vertex.cpp - Vertex Descriptor and Attribute Functions
+#include "guest_clock.h"
 #include "gx_internal.h"
 #include <aurora/env.hpp>
 #include "gx_stream_common.h"
@@ -251,7 +252,7 @@ thread_local bool g_inGxBeginOrFifo = false;
 thread_local std::chrono::steady_clock::time_point g_nextDeferredTimingPoll{};
 
 void ServiceDeferredTimingDuringGxWork() {
-    if (g_inGxBeginOrFifo) {
+    if (g_inGxBeginOrFifo || GuestClock::Deterministic()) {
         return;
     }
 

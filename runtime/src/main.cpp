@@ -1,3 +1,4 @@
+#include "guest_clock.h"
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -77,6 +78,7 @@ namespace {
 std::string FormatHostStackTrace(unsigned framesToSkip = 0);
 
 void ServiceGuestTimingDuringAuroraFrameWait() {
+    if (GuestClock::Deterministic()) return;
     // Aurora can block inside FIFO drains before control returns to GX HLE, for as long as a
     // whole display period. Keep VI retraces, alarms and audio moving at wall-clock cadence here
     // while still suppressing guest rescheduling and recursive Aurora work.

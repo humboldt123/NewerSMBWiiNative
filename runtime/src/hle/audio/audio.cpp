@@ -1,3 +1,4 @@
+#include "guest_clock.h"
 #include "nsmbw_va.h"  // NSMBW_VA: NSMBW addresses below are PAL rev 1, mapped per game version
 #include "memory.h"
 #include "guest_interrupt_context.h"
@@ -592,10 +593,10 @@ namespace {
 // no interval is ever counted twice or dropped between them.
 int64_t ConsumeAudioPollDeltaMicros()
 {
-    using Clock = std::chrono::steady_clock;
-    static thread_local Clock::time_point lastPoll = Clock::now();
+    // Guest clock: in deterministic mode audio DMA completes at fixed points in guest time.
+    static thread_local GuestClock::time_point lastPoll = GuestClock::now();
 
-    const Clock::time_point now = Clock::now();
+    const GuestClock::time_point now = GuestClock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - lastPoll).count();
     lastPoll = now;
 

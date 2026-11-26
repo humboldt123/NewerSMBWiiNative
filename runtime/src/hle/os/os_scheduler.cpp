@@ -1,5 +1,6 @@
 // SelectThread scheduler, OSWakeupThread and the OSMutex primitives.
 
+#include "guest_clock.h"
 #include <cstdio>
 #include <aurora/env.hpp>
 #include <cstdlib>
@@ -388,7 +389,11 @@ extern "C" void SelectThread_801b4fe0(CpuContext* ctx)
                 {
                     const auto sleepStart = std::chrono::steady_clock::now();
                     g_schedulerIdleWakeups.fetch_add(1, std::memory_order_relaxed);
-                    VI_HLE_WaitForNextRetracePoll();
+                    if (GuestClock::Deterministic()) {
+                        GuestClock::IdleStep();
+                    } else {
+                        VI_HLE_WaitForNextRetracePoll();
+                    }
                     g_schedulerIdleSleepNanos.fetch_add(
                         static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                                   std::chrono::steady_clock::now() - sleepStart)

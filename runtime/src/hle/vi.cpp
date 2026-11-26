@@ -15,6 +15,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include "guest_clock.h"
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -54,7 +55,13 @@ std::atomic_bool g_auroraFrameHadWork{false};
 namespace {
 
 using namespace std::chrono_literals;
-using Clock = std::chrono::steady_clock;
+// Guest-visible VI time: the host steady_clock normally, the virtual clock in deterministic mode
+// (guest_clock.h). Sleeps always measure against the real clock (SleepPreciselyUntil).
+struct Clock {
+    using time_point = GuestClock::time_point;
+    using duration = GuestClock::duration;
+    static time_point now() noexcept { return GuestClock::now(); }
+};
 
 constexpr uint32_t kGuestGxRenderModeCopyBytes = 0x39;
 
@@ -213,7 +220,7 @@ constexpr std::chrono::microseconds kFinalSpinWindow{500};
 
 void SleepPreciselyUntil(Clock::time_point deadline, bool finishWithSpin = false,
                          std::chrono::microseconds spinWindow = 750us) {
-    const auto now = Clock::now();
+    const auto now = std::chrono::steady_clock::now();
     if (now >= deadline) {
         return;
     }
@@ -250,13 +257,13 @@ void SleepPreciselyUntil(Clock::time_point deadline, bool finishWithSpin = false
         std::this_thread::sleep_until(deadline);
         return;
     }
-    if (Clock::now() < timerDeadline) {
+    if (std::chrono::steady_clock::now() < timerDeadline) {
         std::this_thread::sleep_until(timerDeadline);
     }
     // This runs only for the final fraction of a VI interval. Do not yield the
     // host thread here: a scheduler quantum is larger than the remaining
     // budget and would recreate the 17-18 ms sawtooth this path removes.
-    while (Clock::now() < deadline) {
+    while (std::chrono::steady_clock::now() < deadline) {
 #if defined(_WIN32)
         YieldProcessor();
 #endif
@@ -701,6 +708,7 @@ void VI_HLE_SetMatchDisplayRate(bool enabled) {
 }
 
 void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
+    if (GuestClock::Deterministic()) paceToRetrace = false;
     if (s_presentSequenceActive.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
@@ -1239,7 +1247,7 @@ extern "C" void VIWaitForRetrace_HLE_801b99ec(CpuContext* ctx)
         }
 
         const auto now = Clock::now();
-        if (now < target) {
+        if (now < target && !GuestClock::Deterministic()) {
             SleepPreciselyUntil(target, true);
         }
         AdvanceRetrace(cpu, target, true);

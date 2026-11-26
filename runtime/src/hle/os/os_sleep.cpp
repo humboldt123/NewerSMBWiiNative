@@ -1,5 +1,6 @@
 // OSSleepTicks / OSSleepThread parking plus the host-side sleep-timer table.
 
+#include "guest_clock.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -81,10 +82,10 @@ void ClearOutstandingPark(uint32_t threadPtr)
 
 void ScheduleSleepTimer(uint32_t threadPtr, uint64_t ticks)
 {
-    using Clock = std::chrono::steady_clock;
+    using Clock = GuestClock::HostClock;
 
     const auto duration = TimeBaseContract::TicksToDuration(ticks);
-    const auto deadline = Clock::now() + duration;
+    const auto deadline = GuestClock::now() + duration;
 
     std::lock_guard<std::mutex> lock(gSleepTimerMutex);
     std::erase_if(gSleepTimers, [threadPtr](const SleepTimerEntry& entry) {
@@ -99,7 +100,7 @@ bool ProcessSleepTimers(CpuContext* cpu)
     using Clock = std::chrono::steady_clock;
 
     std::vector<SleepTimerEntry> dueTimers;
-    const auto now = Clock::now();
+    const auto now = GuestClock::now();
     if (now.time_since_epoch().count() >= gSleepTimerEarliest.load(std::memory_order_acquire)) {
         std::lock_guard<std::mutex> lock(gSleepTimerMutex);
         auto it = gSleepTimers.begin();

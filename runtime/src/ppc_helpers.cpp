@@ -1,3 +1,4 @@
+#include "guest_clock.h"
 #include "ppc_runtime.h"
 // ppc_runtime.h re-exports the rest of the ISA package; the CR tier is pulled in
 // by abi_bridge.h for generated code, so this TU asks for it directly.
@@ -43,13 +44,9 @@ std::bitset<2048> g_warnedSprWrite{};
 std::array<uint32_t, 2048> g_sprShadow{};
 uint32_t g_reservationAddr = 0;
 bool g_hasReservation = false;
-const auto g_timeBaseStart = std::chrono::steady_clock::now();
-
 uint64_t GetTimeBase() {
-    const auto elapsed = std::chrono::steady_clock::now() - g_timeBaseStart;
-    const auto nanoseconds =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
-    return TimeBaseContract::NanosecondsToTicks(static_cast<uint64_t>(nanoseconds));
+    // Wall clock normally; the virtual clock (guest_clock.h) in deterministic mode.
+    return TimeBaseContract::NanosecondsToTicks(GuestClock::ReadNanosForGuest());
 }
 
 constexpr uint32_t kFpscrFx = 1u << 31;
