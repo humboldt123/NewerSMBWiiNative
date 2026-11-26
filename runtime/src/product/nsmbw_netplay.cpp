@@ -277,9 +277,31 @@ void DumpIfRequested(uint32_t frame)
     }
 }
 
+// NSMBW_DET_WATCH=<hex address>: log the word there whenever it changes, per frame.
+void WatchIfRequested(uint32_t frame)
+{
+    static const uint32_t addr = [] {
+        const char* v = std::getenv("NSMBW_DET_WATCH");
+        return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 16)) : 0u;
+    }();
+    static uint32_t last = 0xDEADBEEFu;
+    if (addr == 0) return;
+    const uint8_t* p = GuestFlat::HostPointer(addr);
+    if (p == nullptr) return;
+    const uint32_t v = (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | p[3];
+    if (v != last) {
+        float f;
+        std::memcpy(&f, &v, 4);
+        std::fprintf(stderr, "[det-watch] frame %u %08X = %08X (%g) vnanos %lld\n", frame, addr, v, f,
+                     static_cast<long long>(GuestClock::g_virtualNanos.load()));
+        last = v;
+    }
+}
+
 void HashFrame(uint32_t frame)
 {
     DumpIfRequested(frame);
+    WatchIfRequested(frame);
     if (frame == 0 || frame % kHashEveryFrames != 0) return;
     std::string chunks;
     const uint64_t h = HashGuestMemory(g.hashFile ? &chunks : nullptr);
