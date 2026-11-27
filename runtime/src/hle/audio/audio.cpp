@@ -1,3 +1,4 @@
+#include "savestate.h"
 #include "guest_clock.h"
 #include "nsmbw_va.h"  // NSMBW_VA: NSMBW addresses below are PAL rev 1, mapped per game version
 #include "memory.h"
@@ -591,10 +592,13 @@ namespace {
 // Wall-clock delta since the previous poll, from whichever pump ran it. All
 // pumps live on the guest thread, so the one thread_local cursor is shared and
 // no interval is ever counted twice or dropped between them.
+// The guest-thread poll cursor, file scope so savestates can rewind it with the guest clock.
+GuestClock::time_point g_audioLastPoll = GuestClock::now();
+
 int64_t ConsumeAudioPollDeltaMicros()
 {
     // Guest clock: in deterministic mode audio DMA completes at fixed points in guest time.
-    static thread_local GuestClock::time_point lastPoll = GuestClock::now();
+    GuestClock::time_point& lastPoll = g_audioLastPoll;
 
     const GuestClock::time_point now = GuestClock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - lastPoll).count();
@@ -650,4 +654,21 @@ void Audio_HLE_PollDeferred()
         throw;
     }
     OS_HLE_EndDeferredGuestCallbacks();
+}
+
+// Savestates (savestate.h). The DMA cursor, the AI/DSP register files and the poll cursor; the
+// voices themselves live in guest memory.
+void Audio_SaveState(SaveState::Writer& w) {
+    std::lock_guard<std::mutex> lock(g_ai.mutex);
+    w.Pod(g_ai.startAddr); w.Pod(g_ai.registerStartAddr); w.Pod(g_ai.length); w.Pod(g_ai.callback);
+    w.Pod(g_ai.enabled); w.Pod(g_ai.sampleRate); w.Pod(g_ai.bytesLeft); w.Pod(g_ai.accumulatorSeconds);
+    w.Pod(g_ai.tickActive);
+    w.Pod(g_audioLastPoll);
+}
+void Audio_LoadState(SaveState::Reader& r) {
+    std::lock_guard<std::mutex> lock(g_ai.mutex);
+    r.Pod(g_ai.startAddr); r.Pod(g_ai.registerStartAddr); r.Pod(g_ai.length); r.Pod(g_ai.callback);
+    r.Pod(g_ai.enabled); r.Pod(g_ai.sampleRate); r.Pod(g_ai.bytesLeft); r.Pod(g_ai.accumulatorSeconds);
+    r.Pod(g_ai.tickActive);
+    r.Pod(g_audioLastPoll);
 }

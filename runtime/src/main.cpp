@@ -1115,6 +1115,7 @@ void PosixMemoryFaultHandler(int sig, siginfo_t* info, void* ucontextVoid) {
     // Guest-space faults are the flat memory interception mechanism (MMIO, deferred EFB reads,
     // the executable-write guard, unmapped pages). Resolving one here means resuming the
     // faulting instruction, which just returning from the handler does.
+    if (faultAddress != nullptr && GuestFlat::CowHandleFault(faultAddress)) return;
     if (faultAddress != nullptr && GuestFlatDebugWatchTrap(faultAddress, ucontextVoid)) return;
     if (faultAddress != nullptr && GuestFlat::HandleAccessViolation(faultAddress, isWrite)) {
         return;

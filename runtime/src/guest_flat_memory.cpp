@@ -16,6 +16,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
+#include <deque>
 
 #include "abi_bridge.h"
 #include "memory.h"
@@ -611,6 +612,142 @@ extern "C" bool GuestFlatDebugWatchTrap(void*, void*) noexcept { return false; }
 #endif
 
 namespace GuestFlat {
+
+// ---------------------------------------------------------------------------------------------
+// Copy-on-write frame logs, for rollback savestates (runtime/src/product/nsmbw_savestate.cpp).
+// At the start of each frame every view of guest RAM (the flat guest mirrors and the host alias)
+// is made read-only. The first write to a host page during a frame faults; the page's old bytes
+// go into that frame's log and the page is opened in every view. Rolling back to frame r plays the
+// logs of frames >= r backwards. The cost is the memory the game actually changes, not all of it.
+namespace {
+struct CowView {
+    uint8_t* base;
+    uint64_t sectionOffset;
+    uint64_t size;
+    bool flat;
+    uint32_t guestBase;
+};
+struct CowSection {
+    uint8_t* hostView = nullptr;
+    uint64_t size = 0;
+    std::vector<CowView> views;
+    std::vector<uint32_t> loggedGeneration;
+};
+struct CowLog {
+    uint32_t frame = 0;
+    std::vector<std::pair<uint32_t, uint32_t>> pages;  // section, page
+    std::vector<uint8_t> data;
+};
+std::vector<CowSection> g_cowSections;
+std::deque<CowLog> g_cowLogs;
+std::atomic<bool> g_cowActive{false};
+uint32_t g_cowGeneration = 0;
+std::atomic_flag g_cowLock = ATOMIC_FLAG_INIT;
+constexpr size_t kCowKeepLogs = 64;
+
+struct CowLockGuard {
+    CowLockGuard() { while (g_cowLock.test_and_set(std::memory_order_acquire)) {} }
+    ~CowLockGuard() { g_cowLock.clear(std::memory_order_release); }
+};
+
+void CowBuildSections() {
+    g_cowSections.clear();
+    for (auto& [key, section] : Sections()) {
+        (void)key;
+        CowSection cs;
+        cs.hostView = section.hostView;
+        cs.size = section.size;
+        cs.views.push_back(CowView{section.hostView, 0, section.size, false, 0});
+        for (const auto& r : MappedRegions()) {
+            if (r.hostView == section.hostView) {
+                cs.views.push_back(CowView{g_base + r.guestBase, r.sectionOffset, r.mappedSize, true, r.guestBase});
+            }
+        }
+        cs.loggedGeneration.assign(static_cast<size_t>(section.size >> kHostPageShift), 0u);
+        g_cowSections.push_back(std::move(cs));
+    }
+}
+} // namespace
+
+void CowBeginFrame(uint32_t frame) noexcept {
+    CowLockGuard lock;
+    if (!g_cowActive.load()) {
+        CowBuildSections();
+        g_cowActive.store(true);
+    }
+    ++g_cowGeneration;
+    while (g_cowLogs.size() >= kCowKeepLogs) g_cowLogs.pop_front();
+    CowLog log;
+    log.frame = frame;
+    log.data.reserve(4u << 20);
+    g_cowLogs.push_back(std::move(log));
+    for (const auto& cs : g_cowSections) {
+        for (const auto& v : cs.views) ProtectRange(v.base, v.size, kProtRead);
+    }
+}
+
+// Signal context. Records the page's old bytes once per frame and opens it in every view.
+bool CowHandleFault(void* faultAddress) noexcept {
+    if (!g_cowActive.load(std::memory_order_relaxed)) return false;
+    const uintptr_t fault = reinterpret_cast<uintptr_t>(faultAddress);
+    CowLockGuard lock;
+    for (size_t si = 0; si < g_cowSections.size(); ++si) {
+        CowSection& cs = g_cowSections[si];
+        for (const auto& v : cs.views) {
+            const uintptr_t vb = reinterpret_cast<uintptr_t>(v.base);
+            if (fault < vb || fault >= vb + v.size) continue;
+            const uint64_t secOff = v.sectionOffset + (fault - vb);
+            const uint32_t page = static_cast<uint32_t>(secOff >> kHostPageShift);
+            if (cs.loggedGeneration[page] == g_cowGeneration) return false;  // not ours (exec guard ...)
+            cs.loggedGeneration[page] = g_cowGeneration;
+            CowLog& log = g_cowLogs.back();
+            const uint8_t* src = cs.hostView + (static_cast<uint64_t>(page) << kHostPageShift);
+            log.pages.emplace_back(static_cast<uint32_t>(si), page);
+            log.data.insert(log.data.end(), src, src + kHostPageSize);
+            const uint64_t pageOff = static_cast<uint64_t>(page) << kHostPageShift;
+            for (const auto& w : cs.views) {
+                if (pageOff < w.sectionOffset || pageOff >= w.sectionOffset + w.size) continue;
+                if (w.flat) {
+                    const uint32_t guestPage = static_cast<uint32_t>((w.guestBase + (pageOff - w.sectionOffset)) >> kHostPageShift);
+                    if (ExecutableProtectedPages()[guestPage] != 0) continue;  // the write guard keeps it
+                }
+                ProtectRange(w.base + (pageOff - w.sectionOffset), kHostPageSize, kProtReadWrite);
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+// Rewinds guest RAM to the start of `frame`. Its log (and every newer one) must still be kept.
+bool CowRollback(uint32_t frame) noexcept {
+    CowLockGuard lock;
+    bool found = false;
+    for (const auto& log : g_cowLogs) found = found || log.frame == frame;
+    if (!found) return false;
+    while (!g_cowLogs.empty() && g_cowLogs.back().frame >= frame) {
+        const CowLog& log = g_cowLogs.back();
+        for (size_t i = log.pages.size(); i-- > 0;) {
+            const auto [si, page] = log.pages[i];
+            uint8_t* dst = g_cowSections[si].hostView + (static_cast<uint64_t>(page) << kHostPageShift);
+            ProtectRange(dst, kHostPageSize, kProtReadWrite);
+            std::memcpy(dst, log.data.data() + i * kHostPageSize, kHostPageSize);
+        }
+        g_cowLogs.pop_back();
+    }
+    return true;
+}
+
+bool CowHasFrame(uint32_t frame) noexcept {
+    CowLockGuard lock;
+    for (const auto& log : g_cowLogs) if (log.frame == frame) return true;
+    return false;
+}
+
+size_t CowLastFrameBytes() noexcept {
+    CowLockGuard lock;
+    return g_cowLogs.size() >= 2 ? g_cowLogs[g_cowLogs.size() - 2].data.size() : 0;
+}
 
 void DebugNoteHostWrite(uint32_t address, size_t size, const char* what) noexcept {
     if (g_watchAddr == 0 || address > g_watchAddr || address + size <= g_watchAddr) return;

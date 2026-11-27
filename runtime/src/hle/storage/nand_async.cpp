@@ -3,6 +3,7 @@
 //
 // Shared state and helpers live in nand_internal.h.
 
+#include "savestate.h"
 #include "nand_internal.h"
 
 // Guest callback dispatch: host NAND work completes synchronously, so an "async" call just
@@ -519,3 +520,13 @@ extern "C" int32_t NANDSafeClose_HLE(uint32_t fileInfoPtr) {
     return NAND_RESULT_OK;
 }
 PPC_NATIVE_OVERRIDE(8019CF28, NANDSafeClose_HLE, int32_t, (uint32_t fileInfoPtr), (fileInfoPtr));
+
+// Savestates (savestate.h).
+void NandAsync_SaveState(SaveState::Writer& w) {
+    std::lock_guard<std::mutex> lock(g_pendingNandCallbackMutex);
+    w.Deque(g_pendingNandCallbacks);
+}
+void NandAsync_LoadState(SaveState::Reader& r) {
+    std::lock_guard<std::mutex> lock(g_pendingNandCallbackMutex);
+    r.Deque(g_pendingNandCallbacks);
+}

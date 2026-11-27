@@ -1,4 +1,5 @@
 #pragma once
+#include <vector>
 
 #include <atomic>
 #include <cstdint>
@@ -26,6 +27,11 @@ struct CpuContext;
 // which guest fiber runs; a real timer thread queues VI retraces at the VI cadence. Guest
 // threads only switch at explicit yield points (OSSleepThread, OSYieldThread, ...), matching
 // Wii cooperative semantics exactly.
+
+namespace SaveState { struct Writer; struct Reader; }
+void Fibers_SaveState(SaveState::Writer&);
+void Fibers_LoadState(SaveState::Reader&);
+std::vector<void*> GuestFiberStacksForSaveState(void** schedulerFiber);
 
 namespace Fiber {
 
@@ -112,6 +118,10 @@ private:
     // in-fiber yields that aren't a real guest thread switch: waiting out the EGG::Thread::start
     // deferral loop, and returning control on natural thread exit.
     static void SwitchToScheduler();
+
+    friend void ::Fibers_SaveState(SaveState::Writer&);
+    friend void ::Fibers_LoadState(SaveState::Reader&);
+    friend std::vector<void*> (::GuestFiberStacksForSaveState)(void**);
 
     // Internal state
     static std::mutex s_mutex;

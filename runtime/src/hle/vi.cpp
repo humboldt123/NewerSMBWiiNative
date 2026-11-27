@@ -1,3 +1,4 @@
+#include "savestate.h"
 #include "nsmbw_va.h"  // NSMBW_VA / NSMBW_FUNC: guest addresses are PAL rev 1, mapped per version
 #include "hle_stubs.h"
 #include "memory.h"
@@ -1255,3 +1256,17 @@ extern "C" void VIWaitForRetrace_HLE_801b99ec(CpuContext* ctx)
     ViSetR3(cpu, 0);
 }
 PPC_NATIVE_OVERRIDE_VOID(801B99EC, VIWaitForRetrace_HLE_801b99ec, (CpuContext* ctx), (ctx));
+
+// Savestates (savestate.h). ViState is plain data; its time points are on the guest clock.
+void VI_SaveState(SaveState::Writer& w) {
+    std::lock_guard<std::mutex> lock(g_viMutex);
+    w.Pod(g_vi);
+    w.Pod(Fiber::g_viRetracePendingCount.load());
+}
+void VI_LoadState(SaveState::Reader& r) {
+    std::lock_guard<std::mutex> lock(g_viMutex);
+    r.Pod(g_vi);
+    uint32_t pending = 0;
+    r.Pod(pending);
+    Fiber::g_viRetracePendingCount.store(pending);
+}

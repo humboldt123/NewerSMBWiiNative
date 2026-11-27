@@ -8,6 +8,7 @@
 
 #include "guest_clock.h"
 #include "guest_flat_memory.h"
+#include "nsmbw_savestate.h"
 
 #include <algorithm>
 #include <array>
@@ -142,7 +143,8 @@ uint64_t HashRange(uint32_t start, uint32_t size, uint64_t h)
 uint64_t HashGuestMemory(std::string* chunkReport)
 {
     uint64_t h = 0xCBF29CE484222325ull;
-    struct Region { uint32_t start, size; } regions[] = {{0x80000000u, 0x01800000u}, {0x90000000u, 0x04000000u}};
+    struct Region { uint32_t start, size; } regions[] = {
+        {0x80000000u, 0x01A00000u}, {0x90000000u, 0x08000000u}};  // MEM1 + Newer's overlay, all of MEM2
     for (const auto& r : regions) {
         h = HashRange(r.start, r.size, h);
         if (chunkReport != nullptr) {
@@ -424,5 +426,59 @@ void NsmbwNetplayExchange(uint32_t frame, uint32_t localHold, float localTilt, u
     if (frame > 2u * kInputsPerPacket) {
         g.local.erase(g.local.begin(), g.local.lower_bound(frame - 2u * kInputsPerPacket));
         g.remote.erase(g.remote.begin(), g.remote.lower_bound(frame - 2u * kInputsPerPacket));
+    }
+}
+
+uint32_t NsmbwInputFrame();
+
+// NSMBW_SAVESTATE_TEST=1: every 4 seconds of play, save, run 30 frames, hash guest memory, rewind,
+// run the same 30 frames again and compare. The inputs replay identically (the self-test script's
+// state is part of the savestate), so any difference is state the savestate missed.
+// Called at the start of every game frame, before that frame's input is read.
+void NsmbwRollbackFramePoint(uint32_t frame)
+{
+    static const bool test = [] {
+        const char* v = std::getenv("NSMBW_SAVESTATE_TEST");
+        return v && *v && *v != '0';
+    }();
+    if (!test) return;
+    // Not part of the savestate, so it remembers what happened before a rewind.
+    static int phase = 0;
+    static uint32_t savedFrame = 0;
+    static uint64_t firstHash = 0;
+    static int passes = 0, fails = 0;
+    constexpr uint32_t kSpan = 30;
+    if (phase == 1 || phase == 3) {
+        // Keep a log per frame of the span, as rollback will (only the first save is rewound to).
+        if (frame != savedFrame && NsmbwSavestateSave(1 + static_cast<int>(frame % 8))) return;
+    }
+    if (phase == 0 && frame >= 240 && frame % 240 == 0) {
+        savedFrame = frame;
+        phase = 1;
+        if (NsmbwSavestateSave(0)) {
+            phase = 3;
+            std::fprintf(stderr, "[savestate] rewound to frame %u, replaying\n", NsmbwInputFrame());
+            return;
+        }
+        std::fprintf(stderr, "[savestate] saved frame %u in %llu us (%.2f MB stacks+state+last frame's pages)\n", frame,
+                     static_cast<unsigned long long>(NsmbwSavestateLastSaveMicros()),
+                     NsmbwSavestateSlotBytes(0) / 1048576.0);
+        return;
+    }
+    if ((phase == 1 || phase == 3) && frame == savedFrame + kSpan) {
+        CollectGpuRanges();
+        const uint64_t h = HashGuestMemory(nullptr);
+        if (phase == 1) {
+            firstHash = h;
+            phase = 2;
+            std::fprintf(stderr, "[savestate] frame %u hash %016llX, rewinding to %u\n", frame,
+                         static_cast<unsigned long long>(h), savedFrame);
+            NsmbwSavestateLoad(0);
+        }
+        const bool ok = h == firstHash;
+        (ok ? passes : fails)++;
+        std::fprintf(stderr, "[savestate] replayed to frame %u hash %016llX: %s (%d passed, %d failed)\n", frame,
+                     static_cast<unsigned long long>(h), ok ? "MATCH" : "MISMATCH", passes, fails);
+        phase = 0;
     }
 }

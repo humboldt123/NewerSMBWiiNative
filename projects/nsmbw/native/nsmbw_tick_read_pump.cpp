@@ -37,6 +37,15 @@ extern "C" uint32_t g_nsmbwCurrentViTick;
 extern "C" int NsmbwP1CharacterGet();         // nsmbw_p1_character.cpp
 extern "C" bool NsmbwP1CharacterSet(int ch);  // nsmbw_p1_character.cpp
 uint32_t g_nsmbwCurrentViTick = 0;
+// The NSMBW_AUTO_PRESS_SELFTEST script's counters, at file scope so savestates rewind them.
+struct NsmbwSelfTestState {
+    int diagAutoPressTick = 0;
+    int mapTicks = 0;
+    int levelTicks = 0;
+    bool visitedMap = false;
+    bool mapMinusDone = false;
+};
+NsmbwSelfTestState g_nsmbwSelfTest;
 
 namespace {
 constexpr uint32_t kWpadButtonA = 1u << 11;
@@ -210,7 +219,7 @@ void NsmbwDiagWatch() {
             // ran out at file select on 2026-09-27 (both input paths); 4000 reached 1-1 in ~30 s.
             return v ? static_cast<int>(std::strtol(v, nullptr, 10)) : 4000;
         }();
-        static int diagAutoPressTick = 0;
+        int& diagAutoPressTick = g_nsmbwSelfTest.diagAutoPressTick;
         ++diagAutoPressTick;
         const bool parked = stopScene >= 0 && g_nsmbwCurrentSceneProfile == static_cast<uint32_t>(stopScene);
         // On the world map a resumed save starts Mario on the start node, one step left of 1-1,
@@ -220,7 +229,7 @@ void NsmbwDiagWatch() {
             const char* v = AURORA_ENV("NSMBW_AUTO_PRESS_MAP_RIGHT_TICKS");
             return v ? static_cast<int>(std::strtol(v, nullptr, 10)) : 90;
         }();
-        static int mapTicks = 0;
+        int& mapTicks = g_nsmbwSelfTest.mapTicks;
         const bool onMap = g_nsmbwCurrentSceneProfile == 3u;
         mapTicks = onMap ? mapTicks + 1 : 0;
         // A short tap (ticks 30..33 of the map visit): holding the direction for longer put the
@@ -232,8 +241,8 @@ void NsmbwDiagWatch() {
         const bool walkingRight = onMap && (mapTicks <= mapRightTicks || ((mapTicks - 30) % 120) < 40);
         // In a level entered from the map, hold right + 2 (a running jump over the first Goomba)
         // for ticks 120..600 of the visit (2 pulsed), so the first coins of 1-1 come on screen.
-        static bool visitedMap = false;
-        static int levelTicks = 0;
+        bool& visitedMap = g_nsmbwSelfTest.visitedMap;
+        int& levelTicks = g_nsmbwSelfTest.levelTicks;
         visitedMap = visitedMap || onMap;
         const bool inLevel = visitedMap && g_nsmbwCurrentSceneProfile == 5u;
         levelTicks = inLevel ? levelTicks + 1 : 0;
@@ -252,7 +261,7 @@ void NsmbwDiagWatch() {
             const char* v = AURORA_ENV("NSMBW_AUTO_PRESS_MAP_MINUS_TICK");
             return v ? static_cast<int>(std::strtol(v, nullptr, 10)) : -1;
         }();
-        static bool mapMinusDone = false;
+        bool& mapMinusDone = g_nsmbwSelfTest.mapMinusDone;
         if (mapMinusTick >= 0 && onMap && !mapMinusDone && mapTicks >= mapMinusTick) {
             if (mapTicks < mapMinusTick + 6) {
                 g_nsmbwSelfTestPressBits |= kWpadMinus;
@@ -710,3 +719,5 @@ extern "C" void Calc_800B0B00_Diag()
 }
 
 PPC_NATIVE_OVERRIDE_VOID(800B0B00, Calc_800B0B00_Diag, (), ());
+
+void* NsmbwSelfTestStateForSaveState(size_t* size) { *size = sizeof(g_nsmbwSelfTest); return &g_nsmbwSelfTest; }

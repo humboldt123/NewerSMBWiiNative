@@ -1,3 +1,5 @@
+#include "savestate.h"
+#include <algorithm>
 #include "nsmbw_va.h"  // NSMBW_VA / NSMBW_FUNC: guest addresses are PAL rev 1, mapped per version
 #include "fiber_manager.h"
 #include "memory.h"
@@ -780,3 +782,44 @@ void GuestFiberManager::FiberProcTrampoline() {
 #endif
 
 } // namespace Fiber
+
+// Savestates (savestate.h). Guest thread bookkeeping and saved register files; the native stacks
+// themselves are copied by the savestate core (GuestFiberStacksForSaveState). Fibers can't be
+// created or destroyed by a rewind, so a savestate only loads into the same set of threads.
+void Fibers_SaveState(SaveState::Writer& w) {
+    using Fiber::GuestFiberManager;
+    std::vector<std::pair<uint32_t, Fiber::GuestFiber>> fibers(GuestFiberManager::s_fibers.begin(),
+                                                               GuestFiberManager::s_fibers.end());
+    w.Vector(fibers);
+    w.Pod(GuestFiberManager::s_currentGuestThread);
+    w.Pod(GetPersistentCpuContext());
+}
+void Fibers_LoadState(SaveState::Reader& r) {
+    using Fiber::GuestFiberManager;
+    std::vector<std::pair<uint32_t, Fiber::GuestFiber>> fibers;
+    r.Vector(fibers);
+    if (fibers.size() != GuestFiberManager::s_fibers.size()) throw std::runtime_error("thread set changed since the savestate");
+    for (const auto& [thread, fiber] : fibers) {
+        auto it = GuestFiberManager::s_fibers.find(thread);
+        if (it == GuestFiberManager::s_fibers.end() || it->second.fiber != fiber.fiber) {
+            throw std::runtime_error("thread set changed since the savestate");
+        }
+        it->second = fiber;
+    }
+    r.Pod(GuestFiberManager::s_currentGuestThread);
+    r.Pod(GetPersistentCpuContext());
+    MkwRestoreHostMxcsr(_mm_getcsr());
+    MkwApplyHostNiMode(GetPersistentCpuContext().fpscr);
+}
+
+std::vector<void*> GuestFiberStacksForSaveState(void** schedulerFiber) {
+    using Fiber::GuestFiberManager;
+    std::vector<void*> handles;
+    for (const auto& [thread, fiber] : GuestFiberManager::s_fibers) {
+        if (fiber.fiber != nullptr && fiber.fiber != GuestFiberManager::s_schedulerFiber) handles.push_back(fiber.fiber);
+    }
+    std::sort(handles.begin(), handles.end());
+    handles.erase(std::unique(handles.begin(), handles.end()), handles.end());
+    *schedulerFiber = GuestFiberManager::s_schedulerFiber;
+    return handles;
+}

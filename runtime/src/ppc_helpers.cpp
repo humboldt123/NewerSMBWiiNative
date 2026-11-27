@@ -1,3 +1,4 @@
+#include "savestate.h"
 #include "guest_flat_memory.h"
 #include "guest_clock.h"
 #include "ppc_runtime.h"
@@ -985,4 +986,13 @@ extern "C" double PPC_PsNabs(double value)
 extern "C" double PPC_PsMr(double value)
 {
     return value;
+}
+
+// Savestates (savestate.h). A reservation never survives a rewind.
+void PpcHelpers_SaveState(SaveState::Writer& w) {
+    w.Pod(g_sprShadow);
+}
+void PpcHelpers_LoadState(SaveState::Reader& r) {
+    r.Pod(g_sprShadow);
+    g_hasReservation = false;
 }

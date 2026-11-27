@@ -126,6 +126,8 @@ constexpr uint32_t kViRetraceCountAddr = NSMBW_VA(0x8042AB4Cu); // same accessor
 
 bool g_padInited = false;
 uint32_t g_lastSampledTick = 0xFFFFFFFFu;
+// Game frames sampled so far: the frame number online play agrees on.
+uint32_t g_inputFrame = 0;
 // One Wii Remote per player (channel 0..3); see nsmbw_controls.cpp for which device is which.
 constexpr uint32_t kMaxRemotes = 4;
 uint32_t g_connectedRemotes = 1;
@@ -224,6 +226,7 @@ void SampleKeyboardForFrame() {
     Memory::TryRead32(kViRetraceCountAddr, tick);
     if (tick == g_lastSampledTick) return;
     g_lastSampledTick = tick;
+    NsmbwRollbackFramePoint(g_inputFrame);
 
     InitKeyboardOnce();
     NsmbwSkipBootScreensApply(); // once per frame; see nsmbw_skip_boot_screens.cpp
@@ -238,8 +241,7 @@ void SampleKeyboardForFrame() {
     // Online play: this machine's player 1 controls plus the other machine's, swapped once per
     // frame (runtime/src/product/nsmbw_netplay.cpp). Every frame index is the same on both
     // machines because time is deterministic there, so the sample count is the frame number.
-    static uint32_t s_frame = 0;
-    const uint32_t frame = s_frame++;
+    const uint32_t frame = g_inputFrame++;
     const bool netplay = NsmbwNetplayActive();
     uint32_t agreedHold[kMaxRemotes]{};
     float agreedTilt[kMaxRemotes]{};
@@ -432,3 +434,24 @@ extern "C" int32_t NsmbwKpadRead_801ED500(uint32_t chan, uint32_t samples, uint3
 PPC_NATIVE_OVERRIDE(801ED500, NsmbwKpadRead_801ED500, int32_t,
                     (uint32_t chan, uint32_t samples, uint32_t num, uint32_t errPtr, uint32_t isEx),
                     (chan, samples, num, errPtr, isEx));
+
+// Savestates (savestate.h): everything the input path carries from one frame to the next.
+#include "savestate.h"
+uint32_t& NsmbwWpadConnectedCountForSaveState();
+void* NsmbwSelfTestStateForSaveState(size_t* size);
+extern "C" uint32_t g_nsmbwCurrentViTick;
+void NsmbwInput_SaveState(SaveState::Writer& w) {
+    w.Pod(g_lastSampledTick); w.Pod(g_inputFrame); w.Pod(g_connectedRemotes); w.Pod(g_remotes);
+    w.Pod(g_nsmbwSelfTestPressBits); w.Pod(NsmbwWpadConnectedCountForSaveState()); w.Pod(g_nsmbwCurrentViTick);
+    size_t n = 0;
+    void* st = NsmbwSelfTestStateForSaveState(&n);
+    w.Bytes(st, n);
+}
+void NsmbwInput_LoadState(SaveState::Reader& r) {
+    r.Pod(g_lastSampledTick); r.Pod(g_inputFrame); r.Pod(g_connectedRemotes); r.Pod(g_remotes);
+    r.Pod(g_nsmbwSelfTestPressBits); r.Pod(NsmbwWpadConnectedCountForSaveState()); r.Pod(g_nsmbwCurrentViTick);
+    size_t n = 0;
+    void* st = NsmbwSelfTestStateForSaveState(&n);
+    r.Bytes(st, n);
+}
+uint32_t NsmbwInputFrame() { return g_inputFrame; }

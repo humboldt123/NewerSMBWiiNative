@@ -1,3 +1,4 @@
+#include "savestate.h"
 #include "nsmbw_va.h"  // NSMBW_VA / NSMBW_FUNC: guest addresses are PAL rev 1, mapped per version
 #include "gx_internal.h"
 #include "gx_stream_common.h"
@@ -1581,3 +1582,24 @@ extern "C" void nw4r__lyt__detail__DrawQuad_80084d20(CpuContext* ctx) {
 }
 
 REGISTER_NATIVE_FUNCTION(0x80084D20, nw4r__lyt__detail__DrawQuad_80084d20);
+
+// Savestates (savestate.h): the HLE vertex state persists across frames and the guest relies on it;
+// the applied-state mirror is a cache and is simply invalidated.
+template <typename IO, typename S> static void GxHleFields(IO& io, S& g) {
+    io.Pod(g.vtxDesc); io.Pod(g.vtxAttrFmt); io.Pod(g.vtxLayoutHash); io.Pod(g.vtxLayoutHashDirty);
+    io.Pod(g.vtxStateGeneration); io.Pod(g.vtxArray); io.Pod(g.currentVtxFmt); io.Pod(g.currentPrim);
+    io.Pod(g.vertsRemaining); io.Pod(g.inBegin); io.Pod(g.auroraBeginCalled); io.Pod(g.dirty);
+    io.Pod(g.currentAttr); io.Pod(g.currentComp); io.Pod(g.compBuffer); io.Pod(g.rawCompBuffer);
+    io.Pod(g.fifoReadOffset); io.Pod(g.fifoByteCount); io.Vector(g.fifoBytes);
+}
+void GxHle_SaveState(SaveState::Writer& w) {
+    GxHleFields(w, g_hleGxState);
+}
+void GxHle_LoadState(SaveState::Reader& r) {
+    GxHleFields(r, g_hleGxState);
+    g_hleGxState.InvalidateVtxLayoutHash();
+    s_appliedVtxDescValid = false;
+    s_appliedVtxAttrFmtValid = false;
+    s_appliedVtxStateMatchesHle = false;
+    for (auto& a : s_appliedArrays) a.valid = false;
+}

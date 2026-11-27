@@ -231,3 +231,5 @@ extern "C" int32_t WPADGetInfoAsync_NSMBW_HLE(uint32_t chan, uint32_t infoPtr, u
 }
 PPC_NATIVE_OVERRIDE(801E1400, WPADGetInfoAsync_NSMBW_HLE, int32_t,
          (uint32_t chan, uint32_t infoPtr, uint32_t callback), (chan, infoPtr, callback));
+
+uint32_t& NsmbwWpadConnectedCountForSaveState() { return g_connectedCount; }

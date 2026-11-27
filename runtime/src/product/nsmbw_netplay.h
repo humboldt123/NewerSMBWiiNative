@@ -22,3 +22,5 @@ void NsmbwNetplayExchange(uint32_t frame, uint32_t localHold, float localTilt, u
                           float tilts[4]);
 // Hash check alone, for NSMBW_DET_HASH_FILE without netplay.
 void NsmbwDeterminismFrame(uint32_t frame);
+// Start of every game frame, before input is read: the savestate / rollback point.
+void NsmbwRollbackFramePoint(uint32_t frame);

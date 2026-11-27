@@ -54,6 +54,12 @@ void Initialize(const std::vector<RegionRequest>& regions);
 uint8_t* HostPointer(uint32_t guestAddress);
 // Debug write watchpoint (NSMBW_DET_WATCHW): re-protect after a logged write.
 void DebugRearmWatch() noexcept;
+// Copy-on-write frame logs for rollback (see guest_flat_memory.cpp).
+void CowBeginFrame(uint32_t frame) noexcept;
+bool CowHandleFault(void* faultAddress) noexcept;
+bool CowRollback(uint32_t frame) noexcept;
+bool CowHasFrame(uint32_t frame) noexcept;
+size_t CowLastFrameBytes() noexcept;
 // Debug write watch: host code that copies into guest RAM reports here.
 void DebugNoteHostWrite(uint32_t address, size_t size, const char* what) noexcept;
 void DebugNoteHostPointer(uint32_t address, size_t size, void* caller) noexcept;

@@ -1,3 +1,4 @@
+#include "savestate.h"
 #include "ax_dsp.h"
 
 #include "ax_internal.h"
@@ -118,6 +119,30 @@ public:
             m_mixIdle.wait(lock, [this] { return !m_mixPending && !m_mixBusy; });
         }
         PublishAuxOutputs();
+    }
+
+    // Savestates (savestate.h): mailbox, command list, bus accumulators and aux marshalling.
+    // Called with the mix worker idle (JoinMix first). Voice state lives in guest memory.
+    void SaveState(SaveState::Writer& w) {
+        JoinMix();
+        std::lock_guard<std::mutex> lock(m_mutex);
+        w.Pod(m_mailState); w.Pod(m_toDspBusy); w.Pod(m_cmdListSize); w.Pod(m_cmdList);
+        w.Deque(m_cpuMails); w.Pod(m_lastCpuMail); w.Pod(m_compressorPos); w.Pod(m_deferredResumeCallbacks);
+        w.Pod(m_ucodeCrc); w.Pod(m_pbLayout); w.Pod(m_commandLayout);
+        w.Pod(m_bus); w.Pod(m_wmBus); w.Pod(m_lastMainVolume); w.Pod(m_lastAuxVolumes);
+        w.Pod(m_mixLayout); w.Pod(m_mixCmdListSize);
+        w.Pod(m_deferredAux); w.Pod(m_auxOutCount); w.Pod(m_auxInCount); w.Pod(m_auxOut); w.Pod(m_auxIn);
+    }
+    void LoadState(SaveState::Reader& r) {
+        JoinMix();
+        std::lock_guard<std::mutex> lock(m_mutex);
+        r.Pod(m_mailState); r.Pod(m_toDspBusy); r.Pod(m_cmdListSize); r.Pod(m_cmdList);
+        r.Deque(m_cpuMails); r.Pod(m_lastCpuMail); r.Pod(m_compressorPos); r.Pod(m_deferredResumeCallbacks);
+        r.Pod(m_ucodeCrc); r.Pod(m_pbLayout); r.Pod(m_commandLayout);
+        r.Pod(m_bus); r.Pod(m_wmBus); r.Pod(m_lastMainVolume); r.Pod(m_lastAuxVolumes);
+        r.Pod(m_mixLayout); r.Pod(m_mixCmdListSize);
+        r.Pod(m_deferredAux); r.Pod(m_auxOutCount); r.Pod(m_auxInCount); r.Pod(m_auxOut); r.Pod(m_auxIn);
+        m_mixPending = false;
     }
 
     void ShutdownMixWorker() {
@@ -1569,3 +1594,6 @@ void SetMixWorkerEnabled(bool enabled) {
 }
 
 } // namespace AxDspHle
+
+void AX_SaveState(SaveState::Writer& w) { AxDspHle::Instance().SaveState(w); }
+void AX_LoadState(SaveState::Reader& r) { AxDspHle::Instance().LoadState(r); }

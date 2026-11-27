@@ -1,5 +1,6 @@
 // Interrupt masking/dispatch plus the EXI/IPC hardware stubs that hang off it.
 
+#include "savestate.h"
 #include "nsmbw_va.h"  // NSMBW_VA / NSMBW_FUNC: guest addresses are PAL rev 1, mapped per version
 #include <atomic>
 #include <cstdint>
@@ -517,3 +518,17 @@ extern "C" int32_t IPCCltInit_80193478(CpuContext* ctx)
 }
 
 PPC_NATIVE_OVERRIDE(80193478, IPCCltInit_80193478, int32_t, (CpuContext* ctx), (ctx));
+
+// Savestates (savestate.h).
+void OsInterrupt_SaveState(SaveState::Writer& w) {
+    w.Pod(OsHleInternal::g_interrupts_enabled.load());
+    w.Pod(OsHleInternal::g_interrupt_mask.load());
+}
+void OsInterrupt_LoadState(SaveState::Reader& r) {
+    bool enabled = true;
+    uint32_t mask = 0;
+    r.Pod(enabled);
+    r.Pod(mask);
+    OsHleInternal::g_interrupts_enabled.store(enabled);
+    OsHleInternal::g_interrupt_mask.store(mask);
+}

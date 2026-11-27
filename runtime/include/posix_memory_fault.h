@@ -2,6 +2,7 @@
 
 #if !defined(_WIN32)
 #include <csignal>
+#include "guest_flat_memory.h"
 #include <stdexcept>
 #if defined(__APPLE__)
 #include <sys/ucontext.h>  // <ucontext.h> needs _XOPEN_SOURCE on macOS
@@ -27,6 +28,7 @@ inline void MemoryFault(int signal, siginfo_t* info, void* context) {
         isWrite = (static_cast<ucontext_t*>(context)->uc_mcontext->__es.__esr & (1u << 6)) != 0;
     }
 #endif
+    if (info && GuestFlat::CowHandleFault(info->si_addr)) return;
     if (info && GuestFlatDebugWatchTrap(info->si_addr, context)) return;
     if (info && memoryFaultResolver && memoryFaultResolver(info->si_addr, isWrite)) return;
     constexpr char message[] = "[nsmbw] Unhandled native memory fault.\n";
