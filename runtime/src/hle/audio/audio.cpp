@@ -90,6 +90,10 @@ bool PushAudioBlock(uint32_t startAddr, uint32_t length) {
     if (startAddr == 0 || length == 0) {
         return false;
     }
+    // Rollback re-simulation: these frames were already heard once.
+    if (GuestClock::g_resimulating.load(std::memory_order_relaxed)) {
+        return true;
+    }
     const uint32_t bytes = length;
     const uint8_t* src = nullptr;
     try {

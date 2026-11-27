@@ -43,6 +43,10 @@ inline const std::thread::id g_guestThread = std::this_thread::get_id();
 inline std::atomic<uint64_t> g_offThreadReads{0};
 inline time_point g_wallBase = g_epoch;  // guest thread only
 
+// Set while rollback re-simulates frames: they run as fast as possible (no wall-clock wait) and
+// make no sound.
+inline std::atomic<bool> g_resimulating{false};
+
 inline bool Deterministic() noexcept { return g_deterministic.load(std::memory_order_relaxed); }
 inline void SetDeterministic(bool on) noexcept { g_deterministic.store(on, std::memory_order_relaxed); }
 
@@ -72,6 +76,7 @@ inline void IdleStep() noexcept
 {
     const int64_t v = g_virtualNanos.fetch_add(kIdleStepNanos, std::memory_order_relaxed) + kIdleStepNanos;
     const time_point target = g_wallBase + std::chrono::nanoseconds(v);
+    if (g_resimulating.load(std::memory_order_relaxed)) return;
     const time_point wall = HostClock::now();
     if (wall < target) {
         std::this_thread::sleep_until(target);

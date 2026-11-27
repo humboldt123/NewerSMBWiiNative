@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <map>
 #include <string>
 #include <thread>
@@ -88,6 +89,19 @@ struct State {
     uint64_t lastHash = 0;
     uint32_t desyncs = 0;
     FILE* hashFile = nullptr;
+    // Rollback (NSMBW_NETPLAY_ROLLBACK=1): the other player's input is predicted instead of waited
+    // for, and a wrong guess rewinds to that frame and re-simulates. None of this is in the
+    // savestate, so it survives the rewind.
+    bool rollback = false;
+    uint32_t maxRollback = 8;
+    std::map<uint32_t, InputEntry> used;   // the remote input each frame was simulated with
+    uint32_t confirmed = 0;                // every remote input up to here has arrived
+    bool haveConfirmed = false;
+    uint32_t resimUntil = 0;               // re-simulating until this frame (0: not)
+    uint64_t rollbacks = 0, resimFrames = 0;
+    // Simulated network delay (NSMBW_NETPLAY_FAKE_LAG_MS), one way, for trying rollback on one LAN.
+    int fakeLagMs = 0;
+    std::deque<std::pair<std::chrono::steady_clock::time_point, std::vector<char>>> lagQueue;
 };
 
 State g;
@@ -168,7 +182,12 @@ void InitOnce()
     }
     const char* spec = std::getenv("NSMBW_NETPLAY");
     if (spec == nullptr || *spec == '\0') return;
+    if (const char* rb = std::getenv("NSMBW_NETPLAY_ROLLBACK"); rb && *rb && *rb != '0') {
+        g.rollback = true;
+        g.delay = 1;  // rollback hides the round trip, so input needs (almost) no delay
+    }
     if (const char* d = std::getenv("NSMBW_NETPLAY_DELAY"); d && *d) g.delay = static_cast<uint32_t>(std::atoi(d));
+    if (const char* lag = std::getenv("NSMBW_NETPLAY_FAKE_LAG_MS"); lag && *lag) g.fakeLagMs = std::atoi(lag);
 
     std::string s = spec;
     std::string hostName;
@@ -224,6 +243,8 @@ void InitOnce()
 #endif
     g.active = true;
     GuestClock::SetDeterministic(true);
+    std::fprintf(stderr, "[netplay] %s mode%s\n", g.rollback ? "rollback" : "lockstep",
+                 g.fakeLagMs ? (", simulated lag " + std::to_string(g.fakeLagMs) + " ms each way").c_str() : "");
     std::fprintf(stderr, "[netplay] %s, player %d, input delay %u frames\n",
                  g.host ? ("hosting on UDP " + port).c_str() : ("joining " + hostName + ":" + port).c_str(),
                  g.host ? 1 : 2, g.delay);
@@ -246,8 +267,25 @@ void Send(uint32_t newestFrame)
         p.inputs[n].tilt = it->second.tilt;
     }
     p.count = n;
+    if (g.fakeLagMs > 0) {
+        std::vector<char> bytes(reinterpret_cast<const char*>(&p), reinterpret_cast<const char*>(&p) + sizeof(p));
+        g.lagQueue.emplace_back(std::chrono::steady_clock::now() + std::chrono::milliseconds(g.fakeLagMs),
+                                std::move(bytes));
+        return;
+    }
     ::sendto(g.sock, reinterpret_cast<const char*>(&p), sizeof(p), 0,
              reinterpret_cast<const sockaddr*>(&g.peer), g.peerLen);
+}
+
+void FlushLagQueue()
+{
+    const auto now = std::chrono::steady_clock::now();
+    while (!g.lagQueue.empty() && g.lagQueue.front().first <= now) {
+        const auto& bytes = g.lagQueue.front().second;
+        ::sendto(g.sock, bytes.data(), static_cast<int>(bytes.size()), 0,
+                 reinterpret_cast<const sockaddr*>(&g.peer), g.peerLen);
+        g.lagQueue.pop_front();
+    }
 }
 
 void CheckHash(uint32_t frame)
@@ -268,6 +306,7 @@ void CheckHash(uint32_t frame)
 
 void Receive()
 {
+    FlushLagQueue();
     for (;;) {
         Packet p{};
         sockaddr_storage from{};
@@ -290,6 +329,10 @@ void Receive()
         }
         for (uint32_t i = 0; i < p.count && i < static_cast<uint32_t>(kInputsPerPacket) && i <= p.newestFrame; ++i) {
             g.remote.emplace(p.newestFrame - i, InputEntry{p.inputs[i].hold, p.inputs[i].tilt});
+        }
+        while (g.remote.count(g.haveConfirmed ? g.confirmed + 1 : 0) != 0) {
+            g.confirmed = g.haveConfirmed ? g.confirmed + 1 : 0;
+            g.haveConfirmed = true;
         }
         if (p.hashFrame != 0xFFFFFFFFu) {
             g.remoteHashes[p.hashFrame] = p.hash;
@@ -360,6 +403,123 @@ void HashFrame(uint32_t frame)
     }
 }
 
+bool InputsEqual(const InputEntry& a, const InputEntry& b) { return a.hold == b.hold && a.tilt == b.tilt; }
+
+void FillChannels(const InputEntry& mine, const InputEntry& theirs, uint32_t holds[4], float tilts[4])
+{
+    for (int c = 0; c < 4; ++c) {
+        holds[c] = 0;
+        tilts[c] = 0.0f;
+    }
+    const int myChan = g.host ? 0 : 1;
+    holds[myChan] = mine.hold;
+    tilts[myChan] = static_cast<float>(mine.tilt) / kTiltScale;
+    holds[1 - myChan] = theirs.hold;
+    tilts[1 - myChan] = static_cast<float>(theirs.tilt) / kTiltScale;
+}
+
+// Rollback input: this machine's input is recorded once (re-simulated frames reuse it); the other
+// player's is the real one if it has arrived, otherwise a guess: their last known input.
+void RollbackExchange(uint32_t frame, uint32_t localHold, float localTilt, uint32_t holds[4], float tilts[4])
+{
+    const bool resim = g.resimUntil != 0 && frame < g.resimUntil;
+    for (uint32_t f = 0; f < g.delay && f <= frame; ++f) {
+        g.local.emplace(f, InputEntry{});
+    }
+    if (!resim) {
+        const int16_t tiltQ =
+            static_cast<int16_t>(std::lround(std::fmax(-1.0f, std::fmin(1.0f, localTilt)) * kTiltScale));
+        g.local.emplace(frame + g.delay, InputEntry{localHold, tiltQ});
+        Send(frame + g.delay);
+    }
+    // Hash only states every input before them is final for, so both machines compare like with like.
+    if (g.haveConfirmed && frame >= 1 && frame - 1 <= g.confirmed) HashFrame(frame);
+
+    InputEntry theirs{};
+    if (auto it = g.remote.find(frame); it != g.remote.end()) {
+        theirs = it->second;
+    } else if (auto later = g.remote.upper_bound(frame); later != g.remote.begin()) {
+        theirs = std::prev(later)->second;
+    }
+    g.used[frame] = theirs;
+    FillChannels(g.local[frame], theirs, holds, tilts);
+
+    if (!resim && frame > 4u * kInputsPerPacket) {
+        const uint32_t keep = frame - 4u * kInputsPerPacket;
+        g.local.erase(g.local.begin(), g.local.lower_bound(keep));
+        g.remote.erase(g.remote.begin(), g.remote.lower_bound(std::min(keep, g.confirmed)));
+        g.used.erase(g.used.begin(), g.used.lower_bound(keep));
+    }
+}
+
+int SlotFor(uint32_t frame) { return static_cast<int>(frame % kNsmbwSavestateSlots); }
+
+// The rollback controller, at the start of every frame before input is read.
+void RollbackFramePoint(uint32_t frame)
+{
+    Receive();
+    if (g.resimUntil != 0) {
+        if (frame < g.resimUntil) {
+            NsmbwSavestateSave(SlotFor(frame));  // re-simulated frames get fresh savestates too
+            return;
+        }
+        g.resimUntil = 0;
+        GuestClock::g_resimulating.store(false);
+    }
+
+    // The earliest frame simulated with a wrong guess, if any: rewind there and re-simulate.
+    for (const auto& [f, guess] : g.used) {
+        if (f >= frame) break;
+        const auto real = g.remote.find(f);
+        if (real == g.remote.end() || InputsEqual(real->second, guess)) continue;
+        if (!NsmbwSavestateValid(SlotFor(f)) || NsmbwSavestateFrame(SlotFor(f)) != f) {
+            std::fprintf(stderr, "[netplay] can't roll back to frame %u (no savestate); desync likely\n", f);
+            g.used[f] = real->second;
+            continue;
+        }
+        ++g.rollbacks;
+        g.resimFrames += frame - f;
+        if (g.rollbacks <= 5 || g.rollbacks % 100 == 0) {
+            std::fprintf(stderr, "[netplay] rollback #%llu: frame %u -> %u (%u frames re-simulated)\n",
+                         static_cast<unsigned long long>(g.rollbacks), frame, f, frame - f);
+        }
+        g.resimUntil = frame;
+        GuestClock::g_resimulating.store(true);
+        NsmbwSavestateLoad(SlotFor(f));
+    }
+
+    // Too far ahead of the other player's real input: wait, as lockstep would.
+    using Wall = std::chrono::steady_clock;
+    auto lastNotice = Wall::now();
+    while (frame > g.maxRollback && (!g.haveConfirmed || g.confirmed + g.maxRollback < frame)) {
+        Receive();
+        Send(frame + g.delay - 1);
+        if (Wall::now() - lastNotice >= std::chrono::seconds(2)) {
+            std::fprintf(stderr, "[netplay] waiting for %s (frame %u)\n",
+                         g.havePeer ? "the other player's input" : "player 2 to connect", frame);
+            lastNotice = Wall::now();
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(250));
+    }
+    if (frame <= g.maxRollback && !g.havePeer) {
+        // Nothing to predict from before the other player is even there.
+        while (!g.havePeer) {
+            Receive();
+            Send(frame + g.delay - 1);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        std::fprintf(stderr, "[netplay] connected\n");
+    }
+
+    NsmbwSavestateSave(SlotFor(frame));  // true when a rollback resumes here: re-simulate this frame
+    if (frame % 600 == 0 && frame != 0) {
+        std::fprintf(stderr, "[netplay] frame %u: %llu rollbacks, %llu frames re-simulated, last save %llu us\n",
+                     frame, static_cast<unsigned long long>(g.rollbacks),
+                     static_cast<unsigned long long>(g.resimFrames),
+                     static_cast<unsigned long long>(NsmbwSavestateLastSaveMicros()));
+    }
+}
+
 }  // namespace
 
 bool NsmbwNetplayActive()
@@ -379,14 +539,18 @@ void NsmbwDeterminismFrame(uint32_t frame)
 void NsmbwNetplayExchange(uint32_t frame, uint32_t localHold, float localTilt, uint32_t holds[4], float tilts[4])
 {
     InitOnce();
+    if (g.rollback) {
+        RollbackExchange(frame, localHold, localTilt, holds, tilts);
+        return;
+    }
     HashFrame(frame);
 
     const int16_t tiltQ = static_cast<int16_t>(std::lround(std::fmax(-1.0f, std::fmin(1.0f, localTilt)) * kTiltScale));
     g.local[frame + g.delay] = InputEntry{localHold, tiltQ};
-    // Frames before the first delayed input carry no input on either side.
+    // Frames before this machine's first delayed input carry no input from it. (The other side's
+    // early frames arrive like any others: its input delay can differ from ours.)
     for (uint32_t f = 0; f < g.delay && f <= frame; ++f) {
         g.local.emplace(f, InputEntry{});
-        g.remote.emplace(f, InputEntry{});
     }
 
     using Wall = std::chrono::steady_clock;
@@ -437,6 +601,11 @@ uint32_t NsmbwInputFrame();
 // Called at the start of every game frame, before that frame's input is read.
 void NsmbwRollbackFramePoint(uint32_t frame)
 {
+    InitOnce();
+    if (g.active && g.rollback) {
+        RollbackFramePoint(frame);
+        return;
+    }
     static const bool test = [] {
         const char* v = std::getenv("NSMBW_SAVESTATE_TEST");
         return v && *v && *v != '0';
