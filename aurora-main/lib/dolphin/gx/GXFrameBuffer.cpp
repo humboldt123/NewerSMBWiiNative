@@ -255,6 +255,14 @@ void prune_copy_texture_pool(const void* dest) noexcept {
     return entry.handle.use_count() <= 1 && frame - entry.lastUsedFrame > kCopyTexturePoolIdleFrames;
   });
 }
+// Every guest range an EFB->texture copy targets (destination, buffer size). Those bytes are GPU
+// output, which differs between graphics backends, so online play leaves them out of its
+// memory-hash comparison.
+void ForEachCopyTextureRange(void (*visit)(const void* dest, size_t size, void* user), void* user) {
+  for (const auto& [dest, ref] : g_gxState.copyTextures) {
+    visit(dest, ref.dataSize, user);
+  }
+}
 } // namespace aurora::gx
 
 extern "C" {

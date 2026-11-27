@@ -19,6 +19,8 @@
 #include <map>
 #include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -38,6 +40,10 @@ constexpr SocketHandle kNoSocket = INVALID_SOCKET;
 using SocketHandle = int;
 constexpr SocketHandle kNoSocket = -1;
 #endif
+
+namespace aurora::gx {
+void ForEachCopyTextureRange(void (*visit)(const void* dest, size_t size, void* user), void* user);
+}
 
 namespace {
 
@@ -85,12 +91,44 @@ struct State {
 
 State g;
 
+// Guest ranges written by the GPU (EFB->texture copies). Their bytes depend on the graphics
+// backend (Metal and Direct3D rasterize slightly differently), so the hash skips them.
+std::vector<std::pair<uint32_t, uint32_t>> g_gpuRanges;
+
+void CollectGpuRanges()
+{
+    g_gpuRanges.clear();
+    aurora::gx::ForEachCopyTextureRange(
+        [](const void* dest, size_t size, void*) {
+            const uintptr_t base = reinterpret_cast<uintptr_t>(MKW_FLAT_GUEST_BASE);
+            const uintptr_t p = reinterpret_cast<uintptr_t>(dest);
+            if (p >= base && p - base < GuestFlat::kGuestSpaceSize && size != 0) {
+                g_gpuRanges.emplace_back(static_cast<uint32_t>(p - base), static_cast<uint32_t>(size));
+            }
+        },
+        nullptr);
+}
+
 uint64_t HashRange(uint32_t start, uint32_t size, uint64_t h)
 {
     constexpr uint32_t kChunk = 0x10000;
+    static std::array<uint8_t, kChunk> scratch;
     for (uint32_t off = 0; off < size; off += kChunk) {
         const uint8_t* p = GuestFlat::HostPointer(start + off);
         if (p == nullptr) continue;
+        const uint32_t chunkStart = start + off;
+        bool masked = false;
+        for (const auto& [gs, gz] : g_gpuRanges) {
+            const uint64_t lo = std::max<uint64_t>(gs, chunkStart);
+            const uint64_t hi = std::min<uint64_t>(uint64_t(gs) + gz, uint64_t(chunkStart) + kChunk);
+            if (lo >= hi) continue;
+            if (!masked) {
+                std::memcpy(scratch.data(), p, kChunk);
+                masked = true;
+            }
+            std::memset(scratch.data() + (lo - chunkStart), 0, static_cast<size_t>(hi - lo));
+        }
+        if (masked) p = scratch.data();
         const uint64_t* w = reinterpret_cast<const uint64_t*>(p);
         for (uint32_t i = 0; i < kChunk / 8; ++i) {
             h = (h ^ w[i]) * 0x100000001B3ull;
@@ -304,6 +342,7 @@ void HashFrame(uint32_t frame)
     WatchIfRequested(frame);
     if (frame == 0 || frame % kHashEveryFrames != 0) return;
     std::string chunks;
+    CollectGpuRanges();
     const uint64_t h = HashGuestMemory(g.hashFile ? &chunks : nullptr);
     if (g.hashFile) {
         std::fprintf(g.hashFile, "frame %u hash %016llX vnanos %lld offthread %llu%s\n", frame,

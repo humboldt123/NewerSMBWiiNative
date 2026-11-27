@@ -258,6 +258,14 @@ if(MKW_BUILD_NSMBW)
         endforeach()
     endif()
     target_compile_options(NSMBWGame PRIVATE ${MKW_HOST_MARCH_FLAG} -g)
+    # NSMBW's host code writes guest-visible floats (the wide camera, GX matrices, audio state,
+    # input), and online play needs them to round the same on x86 and ARM; -ffast-math lets each
+    # host reorder and fuse differently. Appended last, so it overrides the common options.
+    foreach(nsmbw_strict_fp_target nsmbw_native nsmbw_data_init nsmbw_runtime_common NSMBWGame)
+        if(TARGET ${nsmbw_strict_fp_target})
+            target_compile_options(${nsmbw_strict_fp_target} PRIVATE -fno-fast-math -ffp-contract=off)
+        endif()
+    endforeach()
     # -g alone only affects compiling; the linker strips debug sections unless told to keep them.
     # The 16 MB stack is on the launcher: Windows takes a thread's default stack size from the exe.
     target_link_options(NSMBWGame PRIVATE -g)

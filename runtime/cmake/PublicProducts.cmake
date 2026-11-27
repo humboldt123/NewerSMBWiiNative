@@ -25,15 +25,8 @@ if(EXISTS "${DATA_INIT_BLOB_ASM}")
 endif()
 list(REMOVE_DUPLICATES SOURCES)
 
-# NSMBW's host code writes guest-visible floats (camera and GX matrices, audio state, input), and
-# online play needs those to round identically on x86 and ARM; -ffast-math lets each host reorder
-# and fuse differently. MKW keeps its fast-math.
 function(mkw_apply_common_compile_options target)
-    if(MKW_BUILD_NSMBW AND NOT MKW_BUILD_MKW)
-        target_compile_options(${target} PRIVATE -O3 -fno-fast-math -ffp-contract=off -w -pipe)
-    else()
-        target_compile_options(${target} PRIVATE -O3 -ffast-math -w -pipe)
-    endif()
+    target_compile_options(${target} PRIVATE -O3 -ffast-math -w -pipe)
 endfunction()
 
 function(mkw_apply_translated_compile_options target)
