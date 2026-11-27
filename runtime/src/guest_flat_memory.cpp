@@ -1,5 +1,8 @@
 #include "guest_clock.h"
 #include "guest_flat_memory.h"
+#if defined(__APPLE__)
+#include <dlfcn.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -608,6 +611,27 @@ extern "C" bool GuestFlatDebugWatchTrap(void*, void*) noexcept { return false; }
 #endif
 
 namespace GuestFlat {
+
+void DebugNoteHostWrite(uint32_t address, size_t size, const char* what) noexcept {
+    if (g_watchAddr == 0 || address > g_watchAddr || address + size <= g_watchAddr) return;
+    std::fprintf(stderr, "[det-watchh] %s wrote %08X+%zx covering %08X, active func %08X vnanos %lld\n", what,
+                 address, size, g_watchAddr, RecompMod::CurrentTranslatedExecutionAddress(),
+                 static_cast<long long>(GuestClock::g_virtualNanos.load()));
+}
+
+void DebugNoteHostPointer(uint32_t address, size_t size, void* caller) noexcept {
+    if (g_watchAddr == 0 || address > g_watchAddr || address + size <= g_watchAddr) return;
+#if defined(__APPLE__)
+    Dl_info info{};
+    dladdr(caller, &info);
+    const char* who = info.dli_sname ? info.dli_sname : "?";
+#else
+    const char* who = "?";
+    (void)caller;
+#endif
+    std::fprintf(stderr, "[det-watchp] host pointer %08X+%zx covering %08X taken by %s, vnanos %lld\n", address,
+                 size, g_watchAddr, who, static_cast<long long>(GuestClock::g_virtualNanos.load()));
+}
 
 void DebugRearmWatch() noexcept {
     if (g_watchAddr == 0) return;

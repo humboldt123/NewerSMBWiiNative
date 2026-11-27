@@ -1,3 +1,4 @@
+#include "guest_flat_memory.h"
 #include "memory.h"
 
 #include <algorithm>
@@ -857,6 +858,7 @@ uint8_t* Memory::GetPointer(uint32_t addr) {
 }
 
 uint8_t* Memory::GetPointer(uint32_t addr, size_t length) {
+    GuestFlat::DebugNoteHostPointer(addr, length, __builtin_return_address(0));
     if (auto* ptr = MemoryInline::GetPointerFast(addr, length)) {
         return ptr;
     }

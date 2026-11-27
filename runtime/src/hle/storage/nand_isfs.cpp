@@ -1,3 +1,4 @@
+#include "guest_flat_memory.h"
 // NAND/ISFS HLE: the IOS_* device layer.
 //
 // Shared state and helpers live in nand_internal.h.
@@ -124,6 +125,7 @@ static bool WriteGuestBytes(uint32_t address, uint32_t size, const uint8_t* data
     if (address == 0 || size < dataSize || !Memory::Contains(address, dataSize)) {
         return false;
     }
+    GuestFlat::DebugNoteHostWrite(address, dataSize, "nand read");
     uint8_t* out = Memory::GetPointer(address, dataSize);
     std::memcpy(out, data, dataSize);
     return true;

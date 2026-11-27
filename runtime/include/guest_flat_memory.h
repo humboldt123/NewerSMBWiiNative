@@ -54,6 +54,9 @@ void Initialize(const std::vector<RegionRequest>& regions);
 uint8_t* HostPointer(uint32_t guestAddress);
 // Debug write watchpoint (NSMBW_DET_WATCHW): re-protect after a logged write.
 void DebugRearmWatch() noexcept;
+// Debug write watch: host code that copies into guest RAM reports here.
+void DebugNoteHostWrite(uint32_t address, size_t size, const char* what) noexcept;
+void DebugNoteHostPointer(uint32_t address, size_t size, void* caller) noexcept;
 
 // Deferred (EFB) reads: the covered guest pages are made PAGE_NOACCESS in the
 // guest view so a flat read traps and materializes the copy.

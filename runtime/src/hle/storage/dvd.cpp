@@ -1,4 +1,5 @@
-﻿#include "nsmbw_va.h"  // NSMBW_VA / NSMBW_FUNC: guest addresses are PAL rev 1, mapped per version
+﻿#include "guest_flat_memory.h"
+#include "nsmbw_va.h"  // NSMBW_VA / NSMBW_FUNC: guest addresses are PAL rev 1, mapped per version
 #include "hle_stubs.h"
 #include "isa/big_endian.h"
 #include <aurora/env.hpp>
@@ -108,6 +109,7 @@ extern "C" uint32_t g_dvdFstReservedSize;
 
 // Byte-wise copy into guest RAM plus the DMA notification the GX caches need.
 static void CopyToGuestAsDma(uint32_t dest, const uint8_t* data, size_t size) {
+    GuestFlat::DebugNoteHostWrite(dest, size, "dvd read");
     for (size_t i = 0; i < size; ++i) {
         Memory::Write8(dest + static_cast<uint32_t>(i), data[i]);
     }
