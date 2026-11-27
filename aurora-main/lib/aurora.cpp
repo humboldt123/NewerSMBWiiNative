@@ -1673,7 +1673,15 @@ std::vector<PresentationJob> encode_sealed_frame(gfx::SealedFrame& sealedFrame, 
 }
 
 // Phase 3: hand the encoded group to whoever owns presentation.
+// Rollback re-simulation (aurora_set_skip_presentation): frames already shown once are encoded so
+// GPU-side state (copy textures, uploads) stays current, but never queued for display, so they
+// don't wait for the display's refresh.
+std::atomic<bool> g_skipPresentation{false};
+
 void publish_presentations(std::vector<PresentationJob>&& presentationJobs, bool interpolationActive) {
+  if (g_skipPresentation.load(std::memory_order_acquire)) {
+    return;
+  }
   // Keep presentation on the presenter whenever the async frame worker runs, even with
   // interpolation off, so every mode shares one surface/resize path. RenderDoc keeps the sync path.
   if (frame_worker_requested() || interpolationActive ||
@@ -2007,6 +2015,7 @@ void aurora_wait_for_frame_worker() { aurora::wait_for_frame_worker(); }
 bool aurora_wait_for_frame_worker_for(uint32_t timeoutMicros) {
   return aurora::wait_for_frame_worker_for(std::chrono::microseconds(timeoutMicros));
 }
+void aurora_set_skip_presentation(bool skip) { aurora::g_skipPresentation.store(skip, std::memory_order_release); }
 void aurora_set_present_schedule(uint64_t baseNanos, uint64_t intervalNanos) {
   aurora::g_presentScheduleBaseNanos.store(baseNanos, std::memory_order_release);
   aurora::g_presentScheduleIntervalNanos.store(intervalNanos, std::memory_order_release);

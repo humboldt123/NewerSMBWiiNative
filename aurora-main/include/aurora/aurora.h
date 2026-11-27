@@ -148,6 +148,8 @@ void aurora_wait_for_frame_worker();
 bool aurora_wait_for_frame_worker_for(uint32_t timeoutMicros);
 // Absolute schedule for the next sealed frame, on steady_clock: baseNanos anchors the group and
 // intervalNanos is the period, so slot k of N+1 fires at base + k*interval/(N+1). Zeros clear it.
+// Encode frames but drop them instead of displaying them (rollback re-simulation).
+void aurora_set_skip_presentation(bool skip);
 void aurora_set_present_schedule(uint64_t baseNanos, uint64_t intervalNanos);
 // Reports whether the frame about to be sealed met its display boundary. Interpolation sizes its
 // slot group from this, backing off after misses. Only paced presents may report.

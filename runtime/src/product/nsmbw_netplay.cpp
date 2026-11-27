@@ -10,6 +10,8 @@
 #include "guest_flat_memory.h"
 #include "nsmbw_savestate.h"
 
+#include <aurora/aurora.h>
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -471,6 +473,7 @@ void RollbackFramePoint(uint32_t frame)
         }
         g.resimUntil = 0;
         GuestClock::g_resimulating.store(false);
+        aurora_set_skip_presentation(false);
     }
 
     // The earliest frame simulated with a wrong guess, if any: rewind there and re-simulate.
@@ -491,6 +494,7 @@ void RollbackFramePoint(uint32_t frame)
         }
         g.resimUntil = frame;
         GuestClock::g_resimulating.store(true);
+        aurora_set_skip_presentation(true);  // these frames were already shown
         g.pendingHashes.erase(g.pendingHashes.upper_bound(f), g.pendingHashes.end());
         NsmbwSavestateLoad(SlotFor(f));
     }
@@ -530,9 +534,16 @@ void RollbackFramePoint(uint32_t frame)
     }
 
     NsmbwSavestateSave(SlotFor(frame));  // true when a rollback resumes here: re-simulate this frame
-    if (frame % 600 == 0 && frame != 0) {
-        std::fprintf(stderr, "[netplay] frame %u: %llu rollbacks, %llu frames re-simulated, last save %llu us\n",
-                     frame, static_cast<unsigned long long>(g.rollbacks),
+    static uint32_t lastStatsFrame = 0;
+    if (frame % 600 == 0 && frame != 0 && frame != lastStatsFrame) {
+        static auto lastStatsTime = std::chrono::steady_clock::now();
+        const auto now = std::chrono::steady_clock::now();
+        const double secs = std::chrono::duration<double>(now - lastStatsTime).count();
+        const double fps = lastStatsFrame != 0 && secs > 0 ? (frame - lastStatsFrame) / secs : 0.0;
+        lastStatsTime = now;
+        lastStatsFrame = frame;
+        std::fprintf(stderr, "[netplay] frame %u: %.1f FPS, %llu rollbacks, %llu frames re-simulated, last save %llu us\n",
+                     frame, fps, static_cast<unsigned long long>(g.rollbacks),
                      static_cast<unsigned long long>(g.resimFrames),
                      static_cast<unsigned long long>(NsmbwSavestateLastSaveMicros()));
     }
