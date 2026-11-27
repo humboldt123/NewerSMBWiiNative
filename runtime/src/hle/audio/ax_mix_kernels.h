@@ -9,7 +9,9 @@
 #include <cstdint>
 #include <cstring>
 
-#if defined(__AVX2__)
+// NSMBW uses the scalar forms everywhere: the mix writes guest-visible state, and online play
+// between x86 and ARM needs the exact same bytes on both (ARM never has the AVX2 forms).
+#if defined(__AVX2__) && !defined(MKW_RUNTIME_PRODUCT_NSMBW)
 #include <immintrin.h>
 #define MKW_AX_MIX_AVX2 1
 #else
