@@ -94,7 +94,7 @@ How it works:
 - The game only sees inputs both machines agreed on. Time is emulated, not read from the host's clock (`runtime/include/guest_clock.h`). So both machines compute exactly the same game, and each one draws its own copy of it.
 - Every second both machines hash the game's memory and compare. A mismatch is logged as `[netplay] DESYNC`.
 
-### Rollback (experimental, macOS/Linux)
+### Rollback (experimental)
 
 Add `NSMBW_NETPLAY_ROLLBACK=1` on a Mac. Your own input applies on the next frame instead of waiting for the network:
 - The game guesses the other player's input (their last known buttons).
@@ -102,7 +102,7 @@ Add `NSMBW_NETPLAY_ROLLBACK=1` on a Mac. Your own input applies on the next fram
 
 Each frame is saved by copy-on-write: guest memory is write-protected and the first write to a page records its old bytes. Saving also copies every guest thread's native stack and the runtime's own state (`runtime/include/savestate.h`). That's about 0.1 ms and a few MB per frame.
 
-A rollback machine can play against a lockstep one, which is how Windows takes part for now. Windows runs game threads on Win32 fibers, which can't be snapshotted yet. `NSMBW_NETPLAY_FAKE_LAG_MS=<ms>` adds simulated one-way lag, to see rollback at work on a LAN.
+It works on macOS and Windows: game threads are libco coroutines on both, so every stack can be copied. A rollback machine can also play against a lockstep one. `NSMBW_NETPLAY_FAKE_LAG_MS=<ms>` adds simulated one-way lag, to see rollback at work on a LAN.
 
 `NSMBW_SAVESTATE_TEST=1` checks the savestates alone: save, play 30 frames, rewind, replay, and compare guest memory.
 
