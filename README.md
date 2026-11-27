@@ -17,7 +17,7 @@ New Super Mario Bros. Wii's PowerPC code, with Newer's code linked in, is transl
 | --- | --- |
 | Windows x64 | Boots and plays Newer: title, intro level, world map, levels |
 | macOS ARM64 | Boots and plays Newer at full speed on an M2 MacBook Air |
-| Online co-op | Deterministic time works: two runs with the same input stay identical. Mac ↔ Windows play is being tested |
+| Online co-op | Works between a Mac and a Windows PC over Tailscale. They stay in sync from boot to the world map and into levels. Still rough: about 45 FPS, and audio sample buffers are falsely flagged as a desync during the file select |
 | Linux | The upstream Linux build should work for the stock game; Newer on Linux is untested |
 
 Not yet checked by hand: every world, bosses, shops and saving through a whole playthrough. The upstream port's setup screen doesn't know about rev 2 or Newer yet, so the disc and Newer folder are set in `Config.toml` (below).
