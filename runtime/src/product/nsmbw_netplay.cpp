@@ -99,6 +99,9 @@ struct State {
     bool haveConfirmed = false;
     uint32_t resimUntil = 0;               // re-simulating until this frame (0: not)
     uint64_t rollbacks = 0, resimFrames = 0;
+    // Rollback hashes wait here until every input before their frame is confirmed; a rollback past
+    // a frame drops its hash (the re-simulation recomputes it).
+    std::map<uint32_t, uint64_t> pendingHashes;
     // Simulated network delay (NSMBW_NETPLAY_FAKE_LAG_MS), one way, for trying rollback on one LAN.
     int fakeLagMs = 0;
     std::deque<std::pair<std::chrono::steady_clock::time_point, std::vector<char>>> lagQueue;
@@ -302,8 +305,9 @@ void CheckHash(uint32_t frame)
         ++g.desyncs;
         std::fprintf(stderr, "[netplay] DESYNC at frame %u (local %016llX, peer %016llX)\n", frame,
                      static_cast<unsigned long long>(l->second), static_cast<unsigned long long>(r->second));
-    } else if (frame % (kHashEveryFrames * 10) == 0) {
-        std::fprintf(stderr, "[netplay] in sync at frame %u\n", frame);
+    } else {
+        static uint32_t matches = 0;
+        if (++matches % 10 == 0) std::fprintf(stderr, "[netplay] in sync at frame %u (%u checks matched)\n", frame, matches);
     }
     g.localHashes.erase(g.localHashes.begin(), std::next(l));
     g.remoteHashes.erase(g.remoteHashes.begin(), std::next(r));
@@ -437,8 +441,10 @@ void RollbackExchange(uint32_t frame, uint32_t localHold, float localTilt, uint3
         g.local.emplace(frame + g.delay, InputEntry{localHold, tiltQ});
         Send(frame + g.delay);
     }
-    // Hash only states every input before them is final for, so both machines compare like with like.
-    if (g.haveConfirmed && frame >= 1 && frame - 1 <= g.confirmed) HashFrame(frame);
+    if (frame != 0 && frame % kHashEveryFrames == 0) {
+        CollectGpuRanges();
+        g.pendingHashes[frame] = HashGuestMemory(nullptr);
+    }
 
     InputEntry theirs{};
     if (auto it = g.remote.find(frame); it != g.remote.end()) {
@@ -490,6 +496,7 @@ void RollbackFramePoint(uint32_t frame)
         }
         g.resimUntil = frame;
         GuestClock::g_resimulating.store(true);
+        g.pendingHashes.erase(g.pendingHashes.upper_bound(f), g.pendingHashes.end());
         NsmbwSavestateLoad(SlotFor(f));
     }
 
@@ -514,6 +521,17 @@ void RollbackFramePoint(uint32_t frame)
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         std::fprintf(stderr, "[netplay] connected\n");
+    }
+
+    // Hashes whose every earlier input is now confirmed (so no rollback can change them) are final.
+    while (!g.pendingHashes.empty() && g.haveConfirmed && g.pendingHashes.begin()->first - 1 <= g.confirmed &&
+           g.pendingHashes.begin()->first < frame) {
+        const auto [hf, hh] = *g.pendingHashes.begin();
+        g.pendingHashes.erase(g.pendingHashes.begin());
+        g.lastHashFrame = hf;
+        g.lastHash = hh;
+        g.localHashes[hf] = hh;
+        CheckHash(hf);
     }
 
     NsmbwSavestateSave(SlotFor(frame));  // true when a rollback resumes here: re-simulate this frame
