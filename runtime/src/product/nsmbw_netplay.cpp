@@ -9,6 +9,7 @@
 #include "guest_clock.h"
 #include "guest_flat_memory.h"
 #include "nsmbw_savestate.h"
+#include "nsmbw_online_lobby.h"
 
 #include <aurora/aurora.h>
 
@@ -631,6 +632,7 @@ uint32_t NsmbwInputFrame();
 void NsmbwRollbackFramePoint(uint32_t frame)
 {
     InitOnce();
+    if (g.active && frame % 120 == 0 && !GuestClock::g_resimulating.load()) nsmbw_online_lobby::MirrorSessionSave();
     if (g.active && g.rollback) {
         RollbackFramePoint(frame);
         return;

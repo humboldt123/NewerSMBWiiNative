@@ -5804,3 +5804,15 @@ loc_80919178:
 }
 
 PPC_NATIVE_OVERRIDE_VOID(80919130, NsmbwGameSetupVoiceEndWait_80919130, (CpuContext* ctx), (ctx));
+
+// Savestates (savestate.h): the character feature's own frame-to-frame state, so a rollback through
+// the character select or the Add/Drop screen replays it exactly.
+#include "savestate.h"
+template <typename IO> static void P1CharacterFields(IO& io) {
+    io.Pod(g_applied); io.Pod(g_appliedMario); io.Pod(g_gaveUp); io.Pod(g_mapModelType); io.Pod(g_mapSceneSeen);
+    io.Pod(g_menuClosedFrames); io.Pod(g_reloadRequested); io.Pod(g_mapPick); io.Pod(g_addDropSeenTick);
+    io.Pod(g_reloadNow); io.Pod(g_okFadeActive); io.Pod(g_okFadeLastFrame); io.Pod(g_reopenSelector);
+    io.Pod(g_decideVoice);
+}
+void NsmbwP1Character_SaveState(SaveState::Writer& w) { P1CharacterFields(w); }
+void NsmbwP1Character_LoadState(SaveState::Reader& r) { P1CharacterFields(r); }

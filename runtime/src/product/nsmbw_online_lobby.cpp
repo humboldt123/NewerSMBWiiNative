@@ -270,6 +270,16 @@ void StartSession(bool host, const std::vector<uint8_t>& save)
                                  : "join:" + g.hostName + ":" + std::to_string(g.port));
     SetEnv("NSMBW_NETPLAY_ROLLBACK", g.rollback ? "1" : "");
     SetEnv("NSMBW_NAND_ROOT", RuntimeConfigFile::PathToUtf8(SessionNandRoot()));
+    // The host keeps what is played online: the session's save is copied back over this one.
+    if (host) {
+        fs::path home = FindSave(RuntimeNandPath::DiscoverNandRootPath());
+        if (home.empty()) {
+            home = RuntimeNandPath::DiscoverNandRootPath() / "title" / "00010004" / "534d4e45" / "data" / "wiimj2d.sav";
+        }
+        SetEnv("NSMBW_ONLINE_HOME_SAVE", RuntimeConfigFile::PathToUtf8(home));
+    } else {
+        SetEnv("NSMBW_ONLINE_HOME_SAVE", "");
+    }
     Relaunch();
 }
 
@@ -506,11 +516,46 @@ bool InSession()
     return v != nullptr && *v != '\0';
 }
 
+void MirrorSessionSave()
+{
+    static const char* home = std::getenv("NSMBW_ONLINE_HOME_SAVE");
+    if (home == nullptr || *home == '\0' || !InSession()) return;
+    static fs::path session;
+    static fs::file_time_type lastCopied{};
+    static bool backedUp = false;
+    std::error_code ec;
+    if (session.empty()) {
+        session = FindSave(SessionNandRoot());
+        if (session.empty()) return;  // the game hasn't written a save yet
+    }
+    const auto written = fs::last_write_time(session, ec);
+    if (ec || written == lastCopied) return;
+    const fs::path target = RuntimeConfigFile::PathFromUtf8(home);
+    fs::create_directories(target.parent_path(), ec);
+    if (!backedUp) {
+        // Once per session: what the save was before playing online.
+        if (fs::exists(target, ec)) {
+            fs::copy_file(target, fs::path(target).concat(".before-online"), fs::copy_options::overwrite_existing, ec);
+        }
+        backedUp = true;
+    }
+    // Write next to it and rename over it, so a crash mid-copy never leaves half a save.
+    const fs::path temp = fs::path(target).concat(".online-tmp");
+    fs::copy_file(session, temp, fs::copy_options::overwrite_existing, ec);
+    if (!ec) fs::rename(temp, target, ec);
+    if (!ec) {
+        lastCopied = written;
+        std::fprintf(stderr, "[online] saved online progress to your save\n");
+    }
+}
+
 void LeaveSession()
 {
+    MirrorSessionSave();
     SetEnv("NSMBW_NETPLAY", "");
     SetEnv("NSMBW_NETPLAY_ROLLBACK", "");
     SetEnv("NSMBW_NAND_ROOT", "");
+    SetEnv("NSMBW_ONLINE_HOME_SAVE", "");
     Relaunch();
 }
 

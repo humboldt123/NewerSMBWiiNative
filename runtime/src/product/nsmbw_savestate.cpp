@@ -110,6 +110,7 @@ void SaveHost(std::vector<uint8_t>& out)
     GxHle_SaveState(w);
     Fibers_SaveState(w);
     NsmbwInput_SaveState(w);
+    NsmbwP1Character_SaveState(w);
 }
 
 void LoadHost(const std::vector<uint8_t>& in)
@@ -125,6 +126,7 @@ void LoadHost(const std::vector<uint8_t>& in)
     GxHle_LoadState(r);
     Fibers_LoadState(r);
     NsmbwInput_LoadState(r);
+    NsmbwP1Character_LoadState(r);
 }
 
 void CopyStack(Slot& s, uint8_t* lo, uint8_t* hi)

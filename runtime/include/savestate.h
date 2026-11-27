@@ -97,3 +97,5 @@ void Fibers_SaveState(SaveState::Writer&);
 void Fibers_LoadState(SaveState::Reader&);
 void NsmbwInput_SaveState(SaveState::Writer&);
 void NsmbwInput_LoadState(SaveState::Reader&);
+void NsmbwP1Character_SaveState(SaveState::Writer&);
+void NsmbwP1Character_LoadState(SaveState::Reader&);

@@ -40,5 +40,8 @@ std::vector<std::string> LocalAddresses();
 bool InSession();
 // Restarts the game locally, ending the session.
 void LeaveSession();
+// Host only: copies the session's save over the host's real one when the game has written it, so
+// progress made online is kept. Cheap; call regularly (a file check) and before leaving.
+void MirrorSessionSave();
 
 }  // namespace nsmbw_online_lobby
