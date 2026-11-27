@@ -276,13 +276,14 @@ void StartSession(bool host, const std::vector<uint8_t>& save)
         return;
     }
     CloseSocket();
+    // Before NSMBW_NAND_ROOT is set below: this has to be the host's own NAND, not the session's.
+    const fs::path home = SavePath(RuntimeNandPath::DiscoverNandRootPath());
     SetEnv("NSMBW_NETPLAY", host ? "host:" + std::to_string(g.port)
                                  : "join:" + g.hostName + ":" + std::to_string(g.port));
     SetEnv("NSMBW_NETPLAY_ROLLBACK", g.rollback ? "1" : "");
     SetEnv("NSMBW_NAND_ROOT", RuntimeConfigFile::PathToUtf8(SessionNandRoot()));
     // The host keeps what is played online: the session's save is copied back over this one.
     if (host) {
-        const fs::path home = SavePath(RuntimeNandPath::DiscoverNandRootPath());
         SetEnv("NSMBW_ONLINE_HOME_SAVE", RuntimeConfigFile::PathToUtf8(home));
     } else {
         SetEnv("NSMBW_ONLINE_HOME_SAVE", "");
@@ -538,6 +539,7 @@ void MirrorSessionSave()
     const auto written = fs::last_write_time(session, ec);
     if (ec || written == lastCopied) return;
     const fs::path target = RuntimeConfigFile::PathFromUtf8(home);
+    if (fs::equivalent(target, session, ec)) return;
     fs::create_directories(target.parent_path(), ec);
     if (!backedUp) {
         // Once per session: what the save was before playing online.
