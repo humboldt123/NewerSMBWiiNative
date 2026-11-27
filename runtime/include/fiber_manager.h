@@ -1,4 +1,11 @@
 #pragma once
+// Guest threads run on Win32 fibers on Windows unless MKW_LIBCO_FIBERS is defined (NSMBW defines it,
+// so savestates can copy every guest stack), and on libco coroutines everywhere else.
+#if defined(_WIN32) && !defined(MKW_LIBCO_FIBERS)
+#define MKW_WIN32_FIBERS 1
+#else
+#define MKW_WIN32_FIBERS 0
+#endif
 #include <vector>
 
 #include <atomic>
@@ -104,7 +111,7 @@ public:
 
 private:
     // The fiber entry point wrapper
-#if defined(_WIN32)
+#if MKW_WIN32_FIBERS
     static void CALLBACK FiberProc(void* param);
 #else
     static void FiberProc(void* param);

@@ -266,6 +266,12 @@ if(MKW_BUILD_NSMBW)
             target_compile_options(${nsmbw_strict_fp_target} PRIVATE -fno-fast-math -ffp-contract=off)
         endif()
     endforeach()
+    # Guest threads on libco on every host, so savestates can copy their stacks (fiber_manager.h).
+    foreach(nsmbw_fiber_target nsmbw_native nsmbw_data_init nsmbw_runtime_common nsmbw_translated NSMBWGame)
+        if(TARGET ${nsmbw_fiber_target})
+            target_compile_definitions(${nsmbw_fiber_target} PRIVATE MKW_LIBCO_FIBERS)
+        endif()
+    endforeach()
     # -g alone only affects compiling; the linker strips debug sections unless told to keep them.
     # The 16 MB stack is on the launcher: Windows takes a thread's default stack size from the exe.
     target_link_options(NSMBWGame PRIVATE -g)
@@ -282,7 +288,8 @@ if(MKW_BUILD_NSMBW)
         mkw::pugixml mkw::toml11 mkw::cryptopp)
     if(WIN32)
         target_link_libraries(NSMBWGame PRIVATE
-            dbghelp user32 winmm ws2_32 iphlpapi secur32 crypt32 windowsapp setupapi winusb shell32 ole32)
+            dbghelp user32 winmm ws2_32 iphlpapi secur32 crypt32 windowsapp setupapi winusb shell32 ole32
+            mkw::libco)
     else()
         target_link_libraries(NSMBWGame PRIVATE mkw::libco)
         if(NOT APPLE)  # ld64 already refuses undefined symbols by default

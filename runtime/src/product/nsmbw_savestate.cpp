@@ -7,23 +7,10 @@
 // Loading copies all of that back from a separate stack, then longjmps into the Save that wrote
 // the slot. The stacks are copied to the same addresses, so pointers into them stay valid.
 //
-// macOS / Linux (libco fibers) only for now: Windows runs guest threads on Win32 fibers, whose
-// saved context is opaque.
+// Guest threads must be libco coroutines (fiber_manager.h); NSMBW uses libco on every host.
 
 #include "nsmbw_savestate.h"
 
-#if defined(_WIN32)
-// Not yet on Windows: guest threads there are Win32 fibers, whose saved context is opaque. A
-// Windows machine can still play online against a rollback peer, in lockstep.
-#include <cstdio>
-#include <cstdlib>
-bool NsmbwSavestateSave(int) { return false; }
-void NsmbwSavestateLoad(int) { std::fprintf(stderr, "[savestate] not supported on Windows\n"); std::abort(); }
-bool NsmbwSavestateValid(int) { return false; }
-uint32_t NsmbwSavestateFrame(int) { return 0; }
-uint64_t NsmbwSavestateLastSaveMicros() { return 0; }
-size_t NsmbwSavestateSlotBytes(int) { return 0; }
-#else
 
 #include "guest_clock.h"
 #include "guest_flat_memory.h"
@@ -37,8 +24,22 @@ size_t NsmbwSavestateSlotBytes(int) { return 0; }
 #include <cstring>
 #include <vector>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+namespace Fiber { void* GuestFiberSchedulerStackTop(); }
+#else
 #include <pthread.h>
+#endif
+
+// setjmp/longjmp that only switch registers. MinGW's longjmp runs Windows exception unwinding
+// through the frames it skips, which must not happen across restored stacks.
+#if defined(_WIN32)
+using SavestateJump = void* [5];
+#define SAVESTATE_SETJMP(b) __builtin_setjmp(b)
+#define SAVESTATE_LONGJMP(b) __builtin_longjmp(b, 1)
+#else
+using SavestateJump = jmp_buf;
+#define SAVESTATE_SETJMP(b) setjmp(b)
+#define SAVESTATE_LONGJMP(b) longjmp(b, 1)
 #endif
 
 std::vector<void*> GuestFiberStacksForSaveState(void** schedulerFiber);
@@ -65,7 +66,7 @@ struct HeaderCopy {
 struct Slot {
     bool valid = false;
     uint32_t frame = 0;
-    jmp_buf jump;
+    SavestateJump jump;
     std::vector<StackCopy> stacks;
     std::vector<HeaderCopy> headers;
     std::vector<uint8_t> host;
@@ -80,7 +81,9 @@ alignas(16) uint8_t g_restoreStack[1 << 20];
 
 uint8_t* MainStackTop()
 {
-#if defined(__APPLE__)
+#if defined(_WIN32)
+    return static_cast<uint8_t*>(Fiber::GuestFiberSchedulerStackTop());
+#elif defined(__APPLE__)
     return static_cast<uint8_t*>(pthread_get_stackaddr_np(pthread_self()));
 #else
     pthread_attr_t attr;
@@ -181,7 +184,7 @@ __attribute__((noinline)) void SaveBody(Slot& s)
     for (const auto& h : s.headers) std::memcpy(h.at, h.bytes.data(), h.bytes.size());
     LoadHost(s.host);
     GuestClock::g_virtualNanos.store(s.virtualNanos);
-    longjmp(s.jump, 1);
+    SAVESTATE_LONGJMP(s.jump);
 }
 
 }  // namespace
@@ -189,7 +192,7 @@ __attribute__((noinline)) void SaveBody(Slot& s)
 bool NsmbwSavestateSave(int slot)
 {
     Slot& s = g_slots[static_cast<size_t>(slot)];
-    if (setjmp(s.jump) != 0) {
+    if (SAVESTATE_SETJMP(s.jump) != 0) {
         g_loading = nullptr;
         GuestFlat::CowBeginFrame(s.frame);
         return true;
@@ -211,7 +214,8 @@ void NsmbwSavestateLoad(int slot)
 #if defined(__aarch64__)
     __asm__ volatile("mov sp, %0\n\tblr %1\n\t" : : "r"(top), "r"(&RestoreBody) : "memory");
 #elif defined(__x86_64__)
-    __asm__ volatile("mov %0, %%rsp\n\tcall *%1\n\t" : : "r"(top), "r"(&RestoreBody) : "memory");
+    // 32 bytes of Win64 shadow space (harmless on System V); top stays 16-byte aligned at the call.
+    __asm__ volatile("mov %0, %%rsp\n\tsub $32, %%rsp\n\tcall *%1\n\t" : : "r"(top), "r"(&RestoreBody) : "memory");
 #endif
     __builtin_unreachable();
 }
@@ -226,4 +230,3 @@ size_t NsmbwSavestateSlotBytes(int slot)
     for (const auto& c : s.stacks) n += c.bytes.size();
     return n;
 }
-#endif  // !_WIN32

@@ -185,12 +185,7 @@ void InitOnce()
     }
     const char* spec = std::getenv("NSMBW_NETPLAY");
     if (spec == nullptr || *spec == '\0') return;
-#if defined(_WIN32)
-    if (std::getenv("NSMBW_NETPLAY_ROLLBACK")) std::fprintf(stderr, "[netplay] rollback isn't available on Windows yet; using lockstep\n");
-    if (false) {
-#else
     if (const char* rb = std::getenv("NSMBW_NETPLAY_ROLLBACK"); rb && *rb && *rb != '0') {
-#endif
         g.rollback = true;
         g.delay = 1;  // rollback hides the round trip, so input needs (almost) no delay
     }

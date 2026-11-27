@@ -424,6 +424,9 @@ LONG CALLBACK FlatGuestVectoredHandler(EXCEPTION_POINTERS* info) {
     }
     void* faultAddress = reinterpret_cast<void*>(record->ExceptionInformation[1]);
     const bool isWrite = record->ExceptionInformation[0] != 0;
+    if (isWrite && CowHandleFault(faultAddress)) {
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
     if (HandleAccessViolation(faultAddress, isWrite)) {
         return EXCEPTION_CONTINUE_EXECUTION;
     }

@@ -89,7 +89,7 @@ set_target_properties(mkw_pugixml PROPERTIES UNITY_BUILD OFF)
 # (__amd64__/__i386__/__arm__/__aarch64__/etc.) only ever selects amd64.c for this project's
 # x86_64-only target (see the platform/arch check above). Windows keeps using native Fibers
 # untouched, so this target is never built there.
-if(NOT WIN32)
+if(NOT WIN32 OR MKW_BUILD_NSMBW)  # NSMBW uses libco on Windows too (MKW_LIBCO_FIBERS)
     add_library(mkw_libco STATIC third_party/libco/libco.c)
     add_library(mkw::libco ALIAS mkw_libco)
     target_include_directories(mkw_libco PUBLIC third_party/libco)
