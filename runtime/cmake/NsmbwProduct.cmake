@@ -158,9 +158,8 @@ if(MKW_BUILD_NSMBW)
         mkw::pugixml mkw::toml11 mkw::cryptopp)
     if(WIN32)
         target_link_libraries(nsmbw_runtime_common PRIVATE shell32 windowsapp)
-    else()
-        target_link_libraries(nsmbw_runtime_common PRIVATE mkw::libco)
     endif()
+    target_link_libraries(nsmbw_runtime_common PRIVATE mkw::libco)  # guest threads, every host
     # Guest-visible audio state (voice positions, envelopes, AUX buffers the game's reverb reads) is
     # computed here, so it must round identically on every host for online play: no fast-math
     # reassociation or contraction, which vectorizes differently on AVX2 and NEON.
