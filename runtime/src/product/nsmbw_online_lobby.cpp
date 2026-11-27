@@ -168,15 +168,29 @@ void Fail(const std::string& why)
 
 fs::path SessionNandRoot() { return RuntimeConfigFile::ApplicationDataDirectory() / "OnlineNAND"; }
 
-// The save inside a NAND root, wherever its title folder is.
-fs::path FindSave(const fs::path& root)
+// The game's save file name: NSMBW's, or Newer's, which renames it.
+#if defined(NSMBW_NEWER)
+constexpr const char* kSaveName = "NerSMBW.sav";
+#else
+constexpr const char* kSaveName = "wiimj2d.sav";
+#endif
+
+// Where the save lives in a NAND root (this game's title folder), whether or not it exists yet.
+fs::path SavePath(const fs::path& root)
 {
     std::error_code ec;
     const fs::path titles = root / "title" / "00010004";
     for (fs::recursive_directory_iterator it(titles, ec), end; !ec && it != end; it.increment(ec)) {
-        if (it->path().filename() == "wiimj2d.sav") return it->path();
+        if (it->path().filename() == kSaveName) return it->path();
     }
-    return {};
+    return titles / "534d4e45" / kSaveName;  // USA (SMNE), the version this build runs
+}
+
+fs::path FindSave(const fs::path& root)
+{
+    std::error_code ec;
+    const fs::path p = SavePath(root);
+    return fs::exists(p, ec) ? p : fs::path{};
 }
 
 std::vector<uint8_t> ReadOwnSave()
@@ -197,11 +211,7 @@ bool PrepareSessionNand(const std::vector<uint8_t>& save)
     fs::create_directories(session, ec);
     fs::copy(own, session, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
     if (ec) return false;
-    fs::path target = FindSave(session);
-    if (target.empty()) {
-        // No save on this machine yet: the game's own folder for it (USA rev 2: SMNE).
-        target = session / "title" / "00010004" / "534d4e45" / "data" / "wiimj2d.sav";
-    }
+    const fs::path target = SavePath(session);
     if (save.empty()) {
         fs::remove(target, ec);
         return true;
@@ -272,10 +282,7 @@ void StartSession(bool host, const std::vector<uint8_t>& save)
     SetEnv("NSMBW_NAND_ROOT", RuntimeConfigFile::PathToUtf8(SessionNandRoot()));
     // The host keeps what is played online: the session's save is copied back over this one.
     if (host) {
-        fs::path home = FindSave(RuntimeNandPath::DiscoverNandRootPath());
-        if (home.empty()) {
-            home = RuntimeNandPath::DiscoverNandRootPath() / "title" / "00010004" / "534d4e45" / "data" / "wiimj2d.sav";
-        }
+        const fs::path home = SavePath(RuntimeNandPath::DiscoverNandRootPath());
         SetEnv("NSMBW_ONLINE_HOME_SAVE", RuntimeConfigFile::PathToUtf8(home));
     } else {
         SetEnv("NSMBW_ONLINE_HOME_SAVE", "");
