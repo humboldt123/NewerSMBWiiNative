@@ -80,23 +80,24 @@ overlay_roots = ["/path/to/Newer folder"]
 
 ## Online co-op (experimental)
 
-Both machines need the same build, the same disc and Newer files, and the same save. Start both from a fresh save with `NSMBW_RESET_SAVE=1` for now. A direct connection is needed: same network, or [Tailscale](https://tailscale.com).
+Both of you need the same build, disc and Newer files, and a direct connection: the same network, or [Tailscale](https://tailscale.com).
 
-```bash
-NSMBW_NETPLAY=host:7777 ./NSMBWCompiled                 # player 1
-NSMBW_NETPLAY=join:<host address>:7777 ./NSMBWCompiled  # player 2
-```
+1. **Host:** open Options (F10), go to the **Online** tab and choose **Host a game**. The screen shows your addresses; give one to your friend. Tailscale's 100.x address is listed first.
+2. **Friend:** Options → **Online** → **Join a game**, type that address and press Enter.
+3. Your save is sent to your friend, and both games restart straight into the session. The host plays as Mario and the joiner as Luigi, each on their own keyboard or controller.
+
+The session runs on a copy of the host's save, so neither of you touches your own save. **Online → Leave** restarts the game normally. While online, the options menu doesn't pause the game; it only stops your own input.
 
 How it works:
+- Every frame, each machine sends its player's input and the game only sees inputs both machines agreed on.
+- Time is emulated, not read from the host's clock (`runtime/include/guest_clock.h`), so both machines compute exactly the same game and each draws its own copy.
+- Every second both hash the game's memory and compare. A mismatch is logged as `[netplay] DESYNC`.
 
-- Each machine plays its own player 1 controls. The host is Mario, the joiner is Luigi.
-- Every frame, each machine sends its input for a few frames ahead and waits for the other's input. Change how far ahead with `NSMBW_NETPLAY_DELAY`, in frames (default 3).
-- The game only sees inputs both machines agreed on. Time is emulated, not read from the host's clock (`runtime/include/guest_clock.h`). So both machines compute exactly the same game, and each one draws its own copy of it.
-- Every second both machines hash the game's memory and compare. A mismatch is logged as `[netplay] DESYNC`.
+Starting a session directly, without the menu: `NSMBW_NETPLAY=host:7777` or `NSMBW_NETPLAY=join:<address>:7777`, from the same save (e.g. `NSMBW_RESET_SAVE=1` on both). `NSMBW_NETPLAY_DELAY` sets the input delay in frames.
 
 ### Rollback (experimental)
 
-Add `NSMBW_NETPLAY_ROLLBACK=1` on a Mac. Your own input applies on the next frame instead of waiting for the network:
+On by default from the Online tab (the **Rollback** switch), or `NSMBW_NETPLAY_ROLLBACK=1`. Your own input applies on the next frame instead of waiting for the network:
 - The game guesses the other player's input (their last known buttons).
 - When the real input arrives and the guess was wrong, it rewinds to that frame and silently replays to the present.
 
