@@ -173,6 +173,13 @@ inline std::filesystem::path CreateManagedNandRoot() {
 }
 
 inline std::filesystem::path DiscoverNandRootPath() {
+    // NSMBW_NAND_ROOT: an online session runs on its own copy of the NAND (the host's save), so
+    // nobody's own save is touched (nsmbw_online_lobby.cpp).
+    if (const char* session = std::getenv("NSMBW_NAND_ROOT"); session != nullptr && *session != '\0') {
+        const std::filesystem::path path = RuntimeConfigFile::PathFromUtf8(session);
+        if (auto existing = ExistingDirectory(path)) return *existing;
+        FailNandRoot("NSMBW_NAND_ROOT is not an existing directory", path);
+    }
     const std::string configPath = RuntimeConfigFile::NandRoot();
     if (!configPath.empty()) {
         const auto path = ResolveConfiguredPath(configPath);

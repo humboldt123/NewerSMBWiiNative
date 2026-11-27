@@ -2,6 +2,8 @@
 // 2026-10-26): the pause window grown to 588x334 units, title in the Mario font, four tabs as pause
 // buttons, up to five rows, a yellow note when one matters (a restart, no controller), and the
 // Select / Back prompts with the player's own button glyphs.
+#include "nsmbw_online_lobby.h"
+#include <cstring>
 #include "nsmbw_va.h"  // NSMBW_VA / NSMBW_FUNC: guest addresses are PAL rev 1, mapped per version
 #include "nsmbw_options_menu.h"
 
@@ -44,11 +46,12 @@ using draw::Align;
 using draw::Rgb;
 
 constexpr draw::Color kNumberTop = Rgb(255, 255, 0), kNumberBottom = Rgb(20, 220, 0); // T_worldNum_00
-constexpr std::array<const char*, 4> kTabs = {"Graphics", "Audio", "Controls", "Advanced"};
+constexpr std::array<const char*, 5> kTabs = {"Graphics", "Audio", "Controls", "Advanced", "Online"};
 constexpr std::array<float, 5> kRowY = {50, 20, -10, -40, -70};
 constexpr int kControlsTab = 2;
+constexpr int kOnlineTab = 4;
 
-enum class Kind { Picker, Toggle, Slider, Player };
+enum class Kind { Picker, Toggle, Slider, Player, Action };  // Action: a button, options[0] its text
 
 struct Row {
     std::string label;
@@ -82,6 +85,9 @@ struct State {
     int heldButton = -1;
     std::array<int, 2> stick{}; // last left-stick direction (x, y), for edge detection
 } g;
+
+void OpenOnline(bool host);
+bool g_onlineRollback = true;
 
 std::vector<Row> BuildRows(int tab) {
     std::vector<Row> rows;
@@ -165,6 +171,24 @@ std::vector<Row> BuildRows(int tab) {
         rows.push_back(std::move(prompts));
         break;
     }
+    case kOnlineTab: {
+        // Going online restarts both games into the session (nsmbw_online_lobby.h).
+        if (nsmbw_online_lobby::InSession()) {
+            const char* mode = std::getenv("NSMBW_NETPLAY");
+            const bool host = mode && std::strncmp(mode, "host:", 5) == 0;
+            rows.push_back({"Online game", Kind::Action, {"Leave"}, 0, [](int) { nsmbw_online_lobby::LeaveSession(); }, {},
+                            std::string("You're player ") + (host ? "1 (host)" : "2") + ". Leave restarts the game."});
+        } else {
+            rows.push_back({"Host a game", Kind::Action, {"Host"}, 0, [](int) { OpenOnline(true); }, {},
+                            "You play as Mario; player 2 joins with your address"});
+            rows.push_back({"Join a game", Kind::Action, {"Join"}, 0, [](int) { OpenOnline(false); }, {},
+                            "Type the host's address to play as Luigi"});
+            rows.push_back({"Rollback", Kind::Toggle, {}, g_onlineRollback ? 1 : 0,
+                            [](int v) { g_onlineRollback = v != 0; }, {},
+                            "On: your moves show at once; Off: a short delay instead of corrections"});
+        }
+        break;
+    }
     default: {
         // The game reads its language through SCGetLanguage (nsmbw_sc_language.cpp) and loads that
         // language's folder as scenes start, so a change applies after a restart. Only the languages
@@ -242,6 +266,9 @@ constexpr uint32_t kProcStopBits = 0x2u | 0x4u | 0x8u;
 uint32_t g_procBitsAdded = 0; // only the bits this menu set, so the game's own are never cleared
 
 void SetGameStopped(bool stopped) {
+    // Online, the game keeps running for both players while this menu is open (it only stops this
+    // player's input): pausing writes game memory, which the other machine wouldn't do.
+    if (nsmbw_online_lobby::InSession()) return;
     uint32_t word = 0;
     if (Memory::TryRead32(kGameStopAddr, word)) {
         uint32_t next = word;
@@ -298,7 +325,7 @@ void LogMenu(const char* what, const char* why) {
 
 // ---- Screens and state --------------------------------------------------------------------------
 
-enum class Screen { Options, Bindings };
+enum class Screen { Options, Bindings, Online };
 Screen g_screen = Screen::Options;
 
 // The bindings screen ("Player N buttons"), opened by a player's Rebind button.
@@ -336,7 +363,13 @@ void Close(const char* why) {
     g.afterPress = nullptr;
 }
 
+void SetTextInput(bool on);
+
 void FinishClose() {
+    if (g_screen == Screen::Online) {
+        nsmbw_online_lobby::Cancel();
+        SetTextInput(false);
+    }
     g.open = false;
     g.closing = false;
     g_screen = Screen::Options;
@@ -361,6 +394,38 @@ void Open(const char* why, bool fromPause) {
 void ShowScreen(Screen screen) {
     g_screen = screen;
     g.openedAt = draw::Now();
+}
+
+// The Host / Join screens (Options > Online).
+struct OnlineScreen {
+    bool host = false;
+    std::string address; // join: what has been typed
+} g_online;
+
+bool TypingAddress() {
+    return g_screen == Screen::Online && !g_online.host && g.open && !g.closing &&
+           nsmbw_online_lobby::CurrentPhase() != nsmbw_online_lobby::Phase::Starting;
+}
+
+void SetTextInput(bool on) {
+    if (SDL_Window* w = SDL_GetKeyboardFocus()) {
+        if (on) SDL_StartTextInput(w);
+        else SDL_StopTextInput(w);
+    }
+}
+
+void OpenOnline(bool host) {
+    g_online = OnlineScreen{};
+    g_online.host = host;
+    ShowScreen(Screen::Online);
+    if (host) nsmbw_online_lobby::Host(g_onlineRollback);
+    else SetTextInput(true);
+}
+
+void LeaveOnlineScreen() {
+    nsmbw_online_lobby::Cancel();
+    SetTextInput(false);
+    ShowScreen(Screen::Options);
 }
 
 void OpenBindings(uint32_t player) {
@@ -409,6 +474,14 @@ void Change(int dx, bool select) {
                 r.set(v);
                 Play(kSndCursor);
             }
+        }
+        return;
+    case Kind::Action:
+        if (select && r.set) {
+            Play(kSndDecide);
+            g.pressPending = true;
+            g.afterPress = [set = r.set] { set(0); };
+            g.afterPressAt = draw::Now() + 8;
         }
         return;
     case Kind::Player: {
@@ -511,10 +584,26 @@ bool BindingsCommand(Cmd cmd, const char* why) {
     return false;
 }
 
+bool OnlineCommand(Cmd cmd, const char* why) {
+    switch (cmd) {
+    case Cmd::Select:
+        if (!g_online.host && !g_online.address.empty()) {
+            nsmbw_online_lobby::Join(g_online.address);
+            Play(kSndDecide);
+        }
+        break;
+    case Cmd::Back: LeaveOnlineScreen(); Play(kSndBack); break;
+    case Cmd::Exit: LeaveOnlineScreen(); Close(why); Play(kSndBack); return true;
+    default: break;
+    }
+    return false;
+}
+
 bool Dispatch(Cmd cmd, const char* why) {
     static constexpr const char* kNames[] = {"up", "down", "left", "right", "select", "back",
                                              "tab-", "tab+", "clear", "reset", "exit"};
     LogMenu(kNames[int(cmd)], why);
+    if (g_screen == Screen::Online) return OnlineCommand(cmd, why);
     return g_screen == Screen::Options ? OptionsCommand(cmd, why) : BindingsCommand(cmd, why);
 }
 
@@ -625,6 +714,33 @@ void HandleEvents(const AuroraEvent* events) noexcept {
     for (const AuroraEvent* ev = events; ev != nullptr && ev->type != AURORA_NONE; ++ev) {
         if (ev->type != AURORA_SDL_EVENT) continue;
         const SDL_Event& e = ev->sdl;
+        // Typing the host's address: letters and keys are text here, not menu commands.
+        if (TypingAddress()) {
+            if (e.type == SDL_EVENT_TEXT_INPUT && e.text.text != nullptr) {
+                for (const char* ch = e.text.text; *ch; ++ch) {
+                    const char c = *ch;
+                    const bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                                    c == '.' || c == ':' || c == '-';
+                    if (ok && g_online.address.size() < 60) {
+                        g_online.address.push_back(c);
+                        Play(kSndCursor);
+                    }
+                }
+                continue;
+            }
+            if (e.type == SDL_EVENT_KEY_DOWN) {
+                switch (e.key.scancode) {
+                case SDL_SCANCODE_BACKSPACE:
+                    if (!g_online.address.empty()) g_online.address.pop_back();
+                    break;
+                case SDL_SCANCODE_RETURN: case SDL_SCANCODE_KP_ENTER: Dispatch(Cmd::Select, "enter"); break;
+                case SDL_SCANCODE_ESCAPE: Dispatch(Cmd::Back, "escape"); break;
+                default: break;
+                }
+                continue;
+            }
+            if (e.type == SDL_EVENT_KEY_UP) continue;
+        }
         // The "open / close options" binding (Options > Controls > Options tab; default F10, and
         // Back + Start on a gamepad), replacing the F10 that settings_overlay used to handle.
         const std::string action = nsmbw_controls::OptionsActionFor(e);
@@ -703,6 +819,13 @@ void DrawRow(const draw::Canvas& c, const Row& r, float y, bool focused) {
             }
             c.Cursor(cx, y, size.x + (r.set && !r.wide ? 52 : 4), size.y + 4, 0.55f);
         }
+        break;
+    }
+    case Kind::Action: {
+        const std::string text = r.options.empty() ? std::string() : r.options[0];
+        if (focused && g.pressPending) c.Press(150, y, 120);
+        const ImVec2 size = c.Button(text, 150, y, 120, 21, focused, 17, false, true);
+        if (focused) c.Cursor(150, y, size.x + 4, size.y + 4, 0.55f);
         break;
     }
     case Kind::Player: {
@@ -858,6 +981,37 @@ void DrawBindings(const draw::Canvas& c) {
     }
 }
 
+void DrawOnline(const draw::Canvas& c) {
+    using nsmbw_online_lobby::Phase;
+    nsmbw_online_lobby::Poll();
+    const Phase phase = nsmbw_online_lobby::CurrentPhase();
+    const draw::TextStyle info{.white = Rgb(225, 235, 225), .outline = true};
+    draw::TextStyle status{.white = Rgb(255, 255, 80), .outline = true};
+    if (phase == Phase::Failed) status.white = Rgb(255, 140, 120);
+    c.Mario(g_online.host ? "Host a game" : "Join a game", 0, 132, 40);
+    c.Rect(0, 94, 540, 1.5f, Rgb(255, 255, 255, 70), Rgb(255, 255, 255, 70));
+    if (g_online.host) {
+        c.Text("Give player 2 one of these addresses:", 0, 72, 17, info);
+        const auto addresses = nsmbw_online_lobby::LocalAddresses();
+        float y = 40;
+        for (const auto& a : addresses) {
+            c.Mario(a, 0, y, 28, kNumberTop, kNumberBottom);
+            y -= 30;
+        }
+        if (addresses.empty()) c.Text("(no network connection found)", 0, y, 17, info);
+    } else {
+        c.Text("Host's address", 0, 66, 17, info);
+        const bool blink = int(draw::Now() / 30) % 2 == 0;
+        const std::string field = g_online.address + (TypingAddress() && blink ? "_" : " ");
+        c.Button(field, 0, 32, 320, 30, true, 22, false, true);
+        c.Text("Like 100.97.16.105 (Tailscale) or 192.168.1.20", 0, 0, 15, info);
+    }
+    c.Text(nsmbw_online_lobby::Status(), 0, -60, 18, status);
+    c.Rect(0, -98, 540, 1.5f, Rgb(255, 255, 255, 70), Rgb(255, 255, 255, 70));
+    if (g_online.host) DrawPrompts(c, kPromptY, {MenuPrompt("Cancel", "back")});
+    else DrawPrompts(c, kPromptY, {{"Join", "south", "return"}, {"Back", "east", "escape"}});
+}
+
 // Set on the game thread by the pause window's Options button (nsmbw_pause_options.cpp) once that
 // window has played its press and out animations; opened here on the next frame. The game already
 // played its own decide sound.
@@ -929,8 +1083,35 @@ void RunScriptedOpenClose() {
     }
 }
 
+// NSMBW_ONLINE_TEST=host | join:<address>: test runs go online through this menu, as a player would:
+// 3 seconds into the title screen (scene 5) the menu opens on the Host or Join screen, and a join
+// types the address and confirms. Not in a session the test already started.
+void RunScriptedOnline() {
+    static const char* spec = std::getenv("NSMBW_ONLINE_TEST");
+    static bool done = false;
+    static float sceneStart = -1;
+    if (spec == nullptr || done || nsmbw_online_lobby::InSession()) return;
+    if (sceneStart < 0) {
+        if (g_nsmbwCurrentSceneProfile != 5) return;
+        sceneStart = draw::Now();
+    }
+    if (draw::Now() - sceneStart < 180) return;
+    done = true;
+    Open("online test", false);
+    g.tab = kOnlineTab;
+    const std::string mode = spec;
+    if (mode == "host") {
+        OpenOnline(true);
+    } else if (mode.rfind("join:", 0) == 0) {
+        OpenOnline(false);
+        g_online.address = mode.substr(5);
+        Dispatch(Cmd::Select, "online test");
+    }
+}
+
 void Draw() noexcept {
     RunScriptedOpenClose();
+    RunScriptedOnline();
     if (!g.open && g_openFromPause.exchange(false)) Open("pause menu", true);
     if (!g.open) OpenOnFirstLaunch();
     if (!g.open) {
@@ -967,6 +1148,7 @@ void Draw() noexcept {
     else c.FillDisplay(Rgb(0, 0, 0, 128));
     c.PauseWindow(0, -2, 588, 334);
     if (g_screen == Screen::Bindings) DrawBindings(c);
+    else if (g_screen == Screen::Online) DrawOnline(c);
     else DrawOptions(c);
     g.pressPending = false;
 }
@@ -975,6 +1157,12 @@ void Draw() noexcept {
 
 int32_t TakeSound() noexcept {
     std::lock_guard lock(g_soundMutex);
+    // Online the menu is silent: its sounds play through the game's own sound engine, which is part
+    // of the game state both machines must keep identical.
+    if (nsmbw_online_lobby::InSession()) {
+        g_sounds.clear();
+        return -1;
+    }
     if (g_sounds.empty()) return -1;
     const int32_t sound = g_sounds.front();
     g_sounds.erase(g_sounds.begin());
