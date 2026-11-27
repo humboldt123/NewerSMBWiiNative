@@ -12,6 +12,19 @@
 
 #include "nsmbw_savestate.h"
 
+#if defined(_WIN32)
+// Not yet on Windows: guest threads there are Win32 fibers, whose saved context is opaque. A
+// Windows machine can still play online against a rollback peer, in lockstep.
+#include <cstdio>
+#include <cstdlib>
+bool NsmbwSavestateSave(int) { return false; }
+void NsmbwSavestateLoad(int) { std::fprintf(stderr, "[savestate] not supported on Windows\n"); std::abort(); }
+bool NsmbwSavestateValid(int) { return false; }
+uint32_t NsmbwSavestateFrame(int) { return 0; }
+uint64_t NsmbwSavestateLastSaveMicros() { return 0; }
+size_t NsmbwSavestateSlotBytes(int) { return 0; }
+#else
+
 #include "guest_clock.h"
 #include "guest_flat_memory.h"
 #include "memory.h"
@@ -213,3 +226,4 @@ size_t NsmbwSavestateSlotBytes(int slot)
     for (const auto& c : s.stacks) n += c.bytes.size();
     return n;
 }
+#endif  // !_WIN32
