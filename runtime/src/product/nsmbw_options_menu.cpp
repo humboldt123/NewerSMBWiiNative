@@ -1009,7 +1009,7 @@ void DrawOnline(const draw::Canvas& c) {
     c.Text(nsmbw_online_lobby::Status(), 0, -60, 18, status);
     c.Rect(0, -98, 540, 1.5f, Rgb(255, 255, 255, 70), Rgb(255, 255, 255, 70));
     if (g_online.host) DrawPrompts(c, kPromptY, {MenuPrompt("Cancel", "back")});
-    else DrawPrompts(c, kPromptY, {{"Join", "south", "return"}, {"Back", "east", "escape"}});
+    else DrawPrompts(c, kPromptY, {{"Join", "south", "enter"}, {"Back", "east", "escape"}});
 }
 
 // Set on the game thread by the pause window's Options button (nsmbw_pause_options.cpp) once that
